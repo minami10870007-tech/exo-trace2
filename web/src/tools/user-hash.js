@@ -97,7 +97,7 @@ async function generate(e) {
 async function copy(text, btn) {
   const label = btn.textContent;
   try { await navigator.clipboard.writeText(text); btn.textContent = 'コピーしました'; }
-  catch (e) { $('result').select(); btn.textContent = '選択しました（Ctrl+C / ⌘C でコピー）'; }
+  catch (e) { (btn.id === 'copySecret' ? $('secret') : $('result')).select(); btn.textContent = '選択しました（Ctrl+C / ⌘C でコピー）'; }
   setTimeout(() => { btn.textContent = label; }, 2500);
 }
 
@@ -110,4 +110,6 @@ $('add').addEventListener('click', () => addUser().querySelector('.em').focus())
 $('form').addEventListener('submit', generate);
 $('copyResult').addEventListener('click', (e) => copy($('result').value, e.currentTarget));
 $('copyList').addEventListener('click', (e) => copy(lastList, e.currentTarget));
+$('makeSecret').addEventListener('click', () => { $('secret').value = hex(crypto.getRandomValues(new Uint8Array(32))); $('copySecret').disabled = false; });
+$('copySecret').addEventListener('click', (e) => copy($('secret').value, e.currentTarget));
 addUser();

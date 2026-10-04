@@ -55,6 +55,12 @@
           <tbody id="list"><tr><td>taro@example.com</td><td class="mono">（例）Kx7p-Qm2v-Ra9d</td></tr></tbody></table>
         <p class="hint">パスワードは本人にだけ伝えてください。このページを閉じると表示は消えます。</p>
       </div>
+      <div class="out-block">
+        <div class="out-head"><b>SESSION_SECRET の値</b><span class="example">最初の1回だけ</span></div>
+        <p class="hint">ログイン状態の署名に使うランダムな文字列です。初めて設定するときに1回だけ作り、Netlify の <b>SESSION_SECRET</b> に貼ります（作り直すと全員がログアウトされます）。</p>
+        <input id="secret" readonly aria-label="SESSION_SECRET の値" placeholder="「作る」を押すと表示されます">
+        <div class="row"><button type="button" class="btn" id="makeSecret">作る</button><button type="button" class="btn btn-primary" id="copySecret" disabled>コピー</button></div>
+      </div>
       <ol class="steps">
         <li>Netlify で <code>EXO_USERS</code> に貼り付けて保存</li>
         <li>Deploys → Trigger deploy で再デプロイ</li>

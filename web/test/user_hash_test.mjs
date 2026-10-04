@@ -36,6 +36,10 @@ try {
     assert.strictEqual(entries.length, 2);
     assert.match(entries[0], /^taro@example\.com:pbkdf2-sha256:600000:[0-9a-f]{32}:[0-9a-f]{64}$/, '形式（メールは小文字化）');
 
+    // SESSION_SECRET の生成
+    await page.click('#makeSecret');
+    assert.match(await page.inputValue('#secret'), /^[0-9a-f]{64}$/, 'SESSION_SECRET は64桁の16進数');
+
     // 生成した値で Netlify Function にログイン
     process.env.EXO_USERS = result;
     const login = (email, password) => page.evaluate(async ([e, p]) => (await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'login', email: e, password: p }) })).status, [email, password]);
