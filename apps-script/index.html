@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  :root { --main:#1F4E5F; --sub:#D9E7EC; --line:#C9D3D8; --ok:#2E7D32; --warn:#B26A00; --ng:#C62828; }
+  * { box-sizing:border-box; }
+  body { font-family:"Hiragino Sans","Meiryo",Arial,sans-serif; font-size:13px; margin:0; color:#222; background:#fff; }
+  header { background:var(--main); color:#fff; padding:8px 14px; font-weight:bold; }
+  nav { display:flex; flex-wrap:wrap; gap:2px; background:var(--sub); padding:4px 8px; position:sticky; top:0; z-index:5; }
+  nav button { border:0; background:transparent; padding:7px 11px; cursor:pointer; border-radius:4px; font-size:13px; }
+  nav button.active { background:var(--main); color:#fff; }
+  main { padding:12px 14px 40px; }
+  section { display:none; } section.active { display:block; }
+  h2 { font-size:15px; color:var(--main); margin:4px 0 10px; border-left:4px solid var(--main); padding-left:6px; }
+  h3 { font-size:13px; margin:16px 0 6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:8px 14px; max-width:960px; }
+  label { display:flex; flex-direction:column; font-size:12px; color:#555; gap:2px; }
+  input, select, textarea { font-size:13px; padding:5px 6px; border:1px solid var(--line); border-radius:4px; font-family:inherit; }
+  textarea { min-height:48px; }
+  button.btn { background:var(--main); color:#fff; border:0; border-radius:4px; padding:7px 14px; cursor:pointer; font-size:13px; }
+  button.btn.sub { background:#fff; color:var(--main); border:1px solid var(--main); }
+  button.btn.ng { background:var(--ng); }
+  button.btn:disabled { opacity:.5; cursor:default; }
+  .actions { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  table { border-collapse:collapse; width:100%; margin:6px 0 12px; }
+  th, td { border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top; }
+  th { background:var(--main); color:#fff; font-weight:normal; white-space:nowrap; }
+  td.num { text-align:right; }
+  tr.clickable:hover { background:#F3F8FA; cursor:pointer; }
+  .msg { padding:8px 10px; border-radius:4px; margin:8px 0; white-space:pre-wrap; }
+  .msg.ok { background:#E8F5E9; color:var(--ok); } .msg.ng { background:#FFEBEE; color:var(--ng); } .msg.warn { background:#FFF3E0; color:var(--warn); }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:#ECEFF1; }
+  .b-RELEASED { background:#E8F5E9; color:var(--ok); } .b-HOLD, .b-QUARANTINE { background:#FFF3E0; color:var(--warn); }
+  .b-RECALLED, .b-REJECTED, .b-EXPIRED { background:#FFEBEE; color:var(--ng); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; margin-bottom:12px; }
+  .card { border:1px solid var(--line); border-radius:6px; padding:10px; }
+  .card b { display:block; font-size:22px; color:var(--main); }
+  .muted { color:#777; font-size:12px; }
+  .box { border:1px solid var(--line); border-radius:6px; padding:10px; margin:10px 0; }
+  #loading { position:fixed; right:12px; bottom:12px; background:var(--main); color:#fff; padding:6px 12px; border-radius:4px; display:none; }
+</style>
+</head>
+<body>
+<header>EXO-TRACE　エクソソーム仕入・販売トレーサビリティ（簡易版）<span id="who" class="muted" style="color:#cfe;float:right"></span></header>
+<nav id="nav"></nav>
+<main>
+  <section id="dashboard"><h2>ダッシュボード</h2><div id="dashBody"></div></section>
+
+  <section id="receipt">
+    <h2>入荷登録</h2>
+    <div class="grid">
+      <label>仕入先<select id="rcSupplier"></select></label>
+      <label>商品<select id="rcProduct"></select></label>
+      <label>仕入先ロット番号<input id="rcSupLot"></label>
+      <label>入荷日<input type="date" id="rcDate"></label>
+      <label>製造日（任意）<input type="date" id="rcMfg"></label>
+      <label>使用期限<input type="date" id="rcExp"><span class="muted">製造日＋有効期間が自動入力されます</span></label>
+      <label>入荷数量<input type="number" id="rcQty" min="1"></label>
+      <label>仕入単価（円・税抜）<input type="number" id="rcPrice" min="0" step="0.01"></label>
+      <label>到着時温度（℃・任意）<input type="number" id="rcTemp" step="0.1"></label>
+      <label>入庫保管場所<select id="rcLoc"></select></label>
+    </div>
+    <div class="actions"><button class="btn" onclick="submitReceipt()">入荷確定</button></div>
+    <div id="rcMsg"></div>
+  </section>
+
+  <section id="inspect">
+    <h2>受入検品・ロットステータス変更（QA）</h2>
+    <div class="actions">
+      <label style="flex-direction:row;align-items:center;gap:6px">表示
+        <select id="insFilter" onchange="loadInspect()">
+          <option value="QUARANTINE,HOLD">検品待ち・保留</option><option value="RELEASED">合格</option><option value="">すべて</option>
+        </select></label>
+    </div>
+    <div id="insBody"></div>
+    <div id="insMsg"></div>
+  </section>
+
+  <section id="shipment">
+    <h2>出荷登録（FEFO自動引当）</h2>
+    <div class="grid">
+      <label>顧客<select id="shCustomer"></select></label>
+      <label>出荷日<input type="date" id="shDate"></label>
+      <label>備考<input id="shNote"></label>
+    </div>
+    <h3>明細</h3>
+    <table><thead><tr><th>商品</th><th>数量</th><th>単価（円・税抜）</th><th></th></tr></thead><tbody id="shLines"></tbody></table>
+    <div class="actions">
+      <button class="btn sub" onclick="addShipLine()">＋ 行追加</button>
+      <button class="btn" onclick="submitShipment()">出荷確定</button>
+      <span class="muted">使用期限の近いロットから自動で割り当てます（合格済・最低出荷残期間以上・隔離保管場所以外）</span>
+    </div>
+    <div id="shMsg"></div>
+    <h3>最近の出荷</h3><div id="shRecent"></div>
+  </section>
+
+  <section id="return">
+    <h2>返品登録</h2>
+    <div class="actions"><input id="rtShipNo" placeholder="出荷番号（例 SH-202610-0001）"><button class="btn sub" onclick="findShipmentForReturn(false)">検索</button></div>
+    <div id="rtShipment"></div>
+    <div id="rtForm" style="display:none" class="box">
+      <div class="grid">
+        <label>返品数量<input type="number" id="rtQty" min="1"></label>
+        <label>返品日<input type="date" id="rtDate"></label>
+        <label>受入保管場所（隔離）<select id="rtQLoc"></select></label>
+        <label>処置<select id="rtDisp" onchange="document.getElementById('rtRLocWrap').style.display=this.value==='RESTOCK'?'flex':'none'">
+          <option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></label>
+        <label id="rtRLocWrap" style="display:none">戻し保管場所<select id="rtRLoc"></select></label>
+        <label style="grid-column:1/-1">返品理由<textarea id="rtReason"></textarea></label>
+      </div>
+      <p class="muted">回収中のロットは自動的に回収品として登録され、処置は廃棄のみになります。</p>
+      <div class="actions"><button class="btn" onclick="submitReturn()">返品登録</button></div>
+    </div>
+    <div id="rtMsg"></div>
+  </section>
+
+  <section id="inventory"><h2>在庫照会</h2><div class="actions"><button class="btn sub" onclick="loadInventory()">再読込</button></div><div id="invBody"></div></section>
+
+  <section id="traceLot">
+    <h2>ロット追跡（ロット → 販売先）</h2>
+    <div class="actions"><input id="tlQuery" placeholder="社内ロット番号 または 仕入先ロット番号（部分一致）" style="min-width:320px"
+      onkeydown="if(event.key==='Enter')searchLot()"><button class="btn" onclick="searchLot()">検索</button></div>
+    <div id="tlBody"></div>
+  </section>
+
+  <section id="traceCustomer">
+    <h2>顧客追跡（顧客 → 購入ロット）</h2>
+    <div class="grid">
+      <label>顧客<select id="tcCustomer"></select></label>
+      <label>出荷日（から）<input type="date" id="tcFrom"></label>
+      <label>出荷日（まで）<input type="date" id="tcTo"></label>
+    </div>
+    <div class="actions"><button class="btn" onclick="searchCustomer()">検索</button></div>
+    <div id="tcBody"></div>
+  </section>
+
+  <section id="recall">
+    <h2>回収管理</h2>
+    <div class="box">
+      <h3 style="margin-top:0">新規回収案件</h3>
+      <div class="grid">
+        <label>件名<input id="rcTitle"></label>
+        <label>重大度<select id="rcSev"><option value="">選択</option><option value="I">クラスI</option><option value="II">クラスII</option><option value="III">クラスIII</option></select></label>
+        <label style="grid-column:1/-1">回収理由<textarea id="rcReason"></textarea></label>
+        <label style="grid-column:1/-1">対象ロット（Ctrl/⌘ で複数選択）<select id="rcLots" multiple size="6"></select></label>
+      </div>
+      <div class="actions"><button class="btn ng" onclick="submitRecall()">回収開始（対象ロットを出荷停止）</button></div>
+    </div>
+    <div id="rclMsg"></div>
+    <div id="rclList"></div>
+  </section>
+
+  <section id="master">
+    <h2>マスタ</h2>
+    <div class="actions">
+      <select id="msTable" onchange="loadMasterList()">
+        <option value="m_product">商品</option><option value="m_customer">顧客</option>
+        <option value="m_supplier">仕入先</option><option value="m_location">保管場所</option>
+      </select>
+      <button class="btn sub" onclick="editMaster(null)">＋ 新規</button>
+    </div>
+    <div id="msForm" class="box" style="display:none"></div>
+    <div id="msMsg"></div>
+    <div id="msList"></div>
+    <h3>販売可否ルール（規制区分 × 顧客区分）</h3>
+    <p class="muted">チェックありの組合せのみ出荷できます。初期値は仮設定です。法的区分の確認後に必ず見直してください。</p>
+    <div id="ruleBody"></div>
+  </section>
+</main>
+<div id="loading">処理中…</div>
+
+<script>
+const TABS = [['dashboard','ダッシュボード'],['receipt','入荷'],['inspect','検品・ロット'],['shipment','出荷'],['return','返品'],
+  ['inventory','在庫'],['traceLot','ロット追跡'],['traceCustomer','顧客追跡'],['recall','回収'],['master','マスタ']];
+let CFG = null, M = null;
+
+// ---------- 共通 ----------
+function call(fn, ...args) {
+  document.getElementById('loading').style.display = 'block';
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(r => { document.getElementById('loading').style.display = 'none'; resolve(r); })
+      .withFailureHandler(e => { document.getElementById('loading').style.display = 'none'; reject(e); })[fn](...args);
+  });
+}
+function $(id) { return document.getElementById(id); }
+function esc(v) { return String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function msg(id, text, kind) { $(id).innerHTML = text ? '<div class="msg ' + (kind || 'ok') + '">' + esc(text) + '</div>' : ''; }
+function err(id) { return e => msg(id, (e && e.message) || String(e), 'ng'); }
+function yen(n) { return Number(n || 0).toLocaleString('ja-JP'); }
+function badge(status, label) { return '<span class="badge b-' + esc(status) + '">' + esc(label || status) + '</span>'; }
+function options(rows, valueKey, labelFn, placeholder) {
+  return (placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '') +
+    rows.map(r => '<option value="' + esc(r[valueKey]) + '">' + esc(labelFn(r)) + '</option>').join('');
+}
+function active(rows) { return rows.filter(r => String(r.is_active) !== 'false'); }
+function table(headers, rows, opts) {
+  opts = opts || {};
+  if (!rows.length) return '<p class="muted">' + (opts.empty || 'データがありません') + '</p>';
+  return '<table><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr' + (r.attrs || '') + '>' + r.cells.map(c => typeof c === 'object' && c !== null ? '<td class="' + (c.cls || '') + '">' + c.html + '</td>' : '<td>' + esc(c) + '</td>').join('') + '</tr>').join('') +
+    '</tbody></table>';
+}
+function n(v) { return { cls: 'num', html: esc(typeof v === 'number' ? v.toLocaleString('ja-JP') : v) }; }
+function h(html) { return { html: html }; }
+function code(type, v) { return (CFG.codes[type] || {})[v] || v || ''; }
+
+function showTab(id) {
+  TABS.forEach(([t]) => { $(t).classList.toggle('active', t === id); });
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadRecentShipments, inventory: loadInventory,
+    recall: loadRecalls, master: () => { loadMasterList(); loadRules(); } };
+  if (loaders[id]) loaders[id]();
+}
+
+async function reloadMasters() {
+  M = await call('getMasters');
+  const sup = active(M.suppliers), prod = active(M.products), cust = active(M.customers);
+  $('rcSupplier').innerHTML = options(sup, 'id', r => r.supplier_code + ' ' + r.name, '選択してください');
+  $('rcProduct').innerHTML = options(prod, 'id', r => r.product_code + ' ' + r.name + '（' + code('storage_class', r.storage_class) + '）', '選択してください');
+  $('shCustomer').innerHTML = options(cust, 'id', r => r.customer_code + ' ' + r.name + '（' + code('customer_type', r.customer_type) + '）', '選択してください');
+  $('tcCustomer').innerHTML = options(M.customers, 'id', r => r.customer_code + ' ' + r.name, '選択してください');
+  fillReceiptLocations();
+  // 既存の出荷明細行の商品リストも最新化（選択値は維持）
+  document.querySelectorAll('.slProd').forEach(sel => {
+    const v = sel.value;
+    sel.innerHTML = options(prod, 'id', r => r.product_code + ' ' + r.name, '選択');
+    sel.value = v;
+  });
+}
+
+// ---------- ダッシュボード ----------
+async function loadDashboard() {
+  try {
+    const d = await call('getDashboard');
+    const lotRows = list => list.map(l => ({ cells: [l.lot_no, l.product, l.expires_on, n(l.daysLeft), h(badge(l.status, l.statusLabel)), n(l.stock)] }));
+    $('dashBody').innerHTML =
+      '<div class="cards">' +
+      '<div class="card">検品待ち<b>' + d.quarantine.length + '</b></div>' +
+      '<div class="card">保留中（在庫あり）<b>' + d.hold.length + '</b></div>' +
+      '<div class="card">期限90日以内<b>' + d.expiringSoon.length + '</b></div>' +
+      '<div class="card">期限切れ在庫<b>' + d.expired.length + '</b></div>' +
+      '<div class="card">発注点以下<b>' + d.lowStock.length + '</b></div>' +
+      '<div class="card">対応中の回収<b>' + d.recalls.length + '</b></div></div>' +
+      '<h3>対応中の回収案件</h3>' + table(['回収番号','件名','対象ロット','連絡済率','回収率'],
+        d.recalls.map(r => ({ cells: [r.recall_no, r.title, r.lots.join(', '), n(r.contactedRate + '%'), n(r.recoveredRate + '%')] })), { empty: 'ありません' }) +
+      '<h3>使用期限90日以内</h3>' + table(['ロット','商品','使用期限','残日数','状態','在庫'], lotRows(d.expiringSoon), { empty: 'ありません' }) +
+      '<h3>期限切れ在庫（廃棄または仕入先返品が必要）</h3>' + table(['ロット','商品','使用期限','残日数','状態','在庫'], lotRows(d.expired), { empty: 'ありません' }) +
+      '<h3>発注点以下の商品</h3>' + table(['商品','引当可能在庫','発注点'], d.lowStock.map(x => ({ cells: [x.product, n(x.available), n(x.reorderPoint)] })), { empty: 'ありません' });
+  } catch (e) { $('dashBody').innerHTML = '<div class="msg ng">' + esc(e.message || e) + '</div>'; }
+}
+
+// ---------- 入荷 ----------
+function fillReceiptLocations() {
+  const p = M.products.find(x => String(x.id) === $('rcProduct').value);
+  const locs = active(M.locations).filter(l => String(l.is_quarantine) !== 'true' && (!p || l.storage_class === p.storage_class));
+  $('rcLoc').innerHTML = options(locs, 'id', l => l.location_code + ' ' + l.name, '選択してください');
+  if (p && !$('rcPrice').value) $('rcPrice').value = '';
+}
+function autoExpiry() {
+  const p = M.products.find(x => String(x.id) === $('rcProduct').value);
+  const mfg = $('rcMfg').value;
+  if (p && mfg && !$('rcExp').dataset.manual) {
+    const d = new Date(mfg + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + Number(p.shelf_life_days || 0));
+    $('rcExp').value = d.toISOString().slice(0, 10);
+  }
+}
+async function submitReceipt() {
+  msg('rcMsg', '');
+  try {
+    const r = await call('registerReceipt', { supplierId: $('rcSupplier').value, productId: $('rcProduct').value, supplierLotNo: $('rcSupLot').value,
+      receiptDate: $('rcDate').value, manufacturedOn: $('rcMfg').value, expiresOn: $('rcExp').value, quantity: $('rcQty').value,
+      unitPrice: $('rcPrice').value, arrivalTemp: $('rcTemp').value, locationId: $('rcLoc').value });
+    msg('rcMsg', '入荷を登録しました。入荷番号 ' + r.receiptNo + '／社内ロット番号 ' + r.lotNo + '（検品待ち）' + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok');
+    ['rcSupLot','rcMfg','rcExp','rcQty','rcPrice','rcTemp'].forEach(id => { $(id).value = ''; });
+    delete $('rcExp').dataset.manual;
+  } catch (e) { err('rcMsg')(e); }
+}
+
+// ---------- 検品 ----------
+const NEXT = { QUARANTINE: ['RELEASED','HOLD','REJECTED'], RELEASED: ['HOLD'], HOLD: ['RELEASED','QUARANTINE','REJECTED'] };
+async function loadInspect() {
+  const f = $('insFilter').value;
+  try {
+    const lots = await call('getLots', f ? f.split(',') : []);
+    $('insBody').innerHTML = table(['ロット','仕入先ロット','商品','仕入先','使用期限','在庫','状態','変更後','理由','COA確認',''],
+      lots.map(l => {
+        const nexts = NEXT[l.status] || [];
+        if (!nexts.length) return { cells: [l.lot_no, l.supplier_lot_no, l.product, l.supplier, l.expires_on, n(l.stock), h(badge(l.status, l.statusLabel)), '—', l.status_reason, '', ''] };
+        return { cells: [l.lot_no, l.supplier_lot_no, l.product, l.supplier, l.expires_on, n(l.stock),
+          h(badge(l.status, l.statusLabel) + (l.status_reason ? '<div class="muted">' + esc(l.status_reason) + '</div>' : '')),
+          h('<select id="to_' + l.id + '">' + nexts.map(s => '<option value="' + s + '">' + esc(code('lot_status', s)) + '</option>').join('') + '</select>'),
+          h('<input id="rs_' + l.id + '" placeholder="合格以外は必須">'),
+          h('<input type="checkbox" id="coa_' + l.id + '">'),
+          h('<button class="btn" onclick="changeStatus(' + l.id + ')">変更</button>')] };
+      }), { empty: '対象のロットはありません' });
+  } catch (e) { err('insMsg')(e); }
+}
+async function changeStatus(id) {
+  msg('insMsg', '');
+  try {
+    const r = await call('changeLotStatus', { lotId: id, to: $('to_' + id).value, reason: $('rs_' + id).value, coaConfirmed: $('coa_' + id).checked });
+    msg('insMsg', 'ロット ' + r.lot_no + ' を「' + r.statusLabel + '」にしました。');
+    loadInspect();
+  } catch (e) { err('insMsg')(e); }
+}
+
+// ---------- 出荷 ----------
+function addShipLine() {
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td><select class="slProd">' + options(active(M.products), 'id', r => r.product_code + ' ' + r.name, '選択') + '</select></td>' +
+    '<td><input type="number" class="slQty" min="1" style="width:90px"></td><td><input type="number" class="slPrice" min="0" step="0.01" style="width:120px"></td>' +
+    '<td><button class="btn sub" onclick="this.closest(\'tr\').remove()">削除</button></td>';
+  tr.querySelector('.slProd').onchange = e => {
+    const p = M.products.find(x => String(x.id) === e.target.value);
+    tr.querySelector('.slPrice').value = p ? p.list_price : '';
+  };
+  $('shLines').appendChild(tr);
+}
+async function submitShipment() {
+  msg('shMsg', '');
+  const lines = [...$('shLines').querySelectorAll('tr')].map(tr => ({ productId: tr.querySelector('.slProd').value,
+    quantity: tr.querySelector('.slQty').value, unitPrice: tr.querySelector('.slPrice').value }));
+  try {
+    const s = await call('createShipment', { customerId: $('shCustomer').value, shippedOn: $('shDate').value, note: $('shNote').value, lines: lines });
+    $('shMsg').innerHTML = '<div class="msg ok">出荷を確定しました。出荷番号 ' + esc(s.shipment_no) + '（' + esc(s.customer) + '）</div>' +
+      table(['商品','ロット','使用期限','数量','単価'], s.lines.map(l => ({ cells: [l.product, l.lot_no, l.expires_on, n(l.quantity), n(l.unit_price)] })));
+    $('shLines').innerHTML = ''; addShipLine(); $('shNote').value = '';
+    loadRecentShipments();
+  } catch (e) { err('shMsg')(e); }
+}
+async function loadRecentShipments() {
+  try {
+    const list = await call('getRecentShipments', 30);
+    $('shRecent').innerHTML = table(['出荷番号','出荷日','顧客','明細（商品 / ロット × 数量）','金額','状態',''],
+      list.map(s => ({ cells: [s.shipment_no, s.shipped_on, s.customer,
+        h(s.lines.map(l => esc(l.product) + ' / ' + esc(l.lot_no) + ' × ' + l.quantity + (l.returned ? '（返品' + l.returned + '）' : '')).join('<br>')),
+        n(yen(s.amount)), s.status === 'SHIPPED' ? '出荷済' : '取消',
+        s.status === 'SHIPPED' ? h('<button class="btn sub" onclick="cancelShip(' + s.id + ',\'' + esc(s.shipment_no) + '\')">取消</button>') : ''] })));
+  } catch (e) { err('shMsg')(e); }
+}
+async function cancelShip(id, no) {
+  const reason = prompt('出荷 ' + no + ' を取消します（在庫に戻ります）。取消理由を入力してください。');
+  if (!reason) return;
+  try { await call('cancelShipment', id, reason); msg('shMsg', '出荷 ' + no + ' を取消しました。'); loadRecentShipments(); }
+  catch (e) { err('shMsg')(e); }
+}
+
+// ---------- 返品 ----------
+let RT = { shipment: null, lineId: null };
+async function findShipmentForReturn(keepMsg) {
+  if (!keepMsg) msg('rtMsg', '');
+  $('rtForm').style.display = 'none';
+  try {
+    const s = await call('getShipmentByNo', $('rtShipNo').value);
+    RT.shipment = s;
+    $('rtShipment').innerHTML = '<p>' + esc(s.shipment_no) + '　' + esc(s.shipped_on) + '　' + esc(s.customer) + (s.status !== 'SHIPPED' ? '　<b style="color:#C62828">取消済</b>' : '') + '</p>' +
+      table(['商品','ロット','ロット状態','出荷数','返品済','返品可能',''], s.lines.map(l => ({ cells: [l.product, l.lot_no, l.lot_status, n(l.quantity), n(l.returned), n(l.returnable),
+        l.returnable > 0 ? h('<button class="btn sub" onclick="selectReturnLine(' + l.id + ',' + l.returnable + ')">この明細を返品</button>') : ''] })));
+  } catch (e) { $('rtShipment').innerHTML = ''; err('rtMsg')(e); }
+}
+function selectReturnLine(lineId, max) {
+  RT.lineId = lineId;
+  $('rtForm').style.display = 'block';
+  $('rtQty').max = max; $('rtQty').value = max; $('rtDate').value = CFG.today;
+  $('rtQLoc').innerHTML = options(active(M.locations).filter(l => String(l.is_quarantine) === 'true'), 'id', l => l.location_code + ' ' + l.name, '選択してください');
+  $('rtRLoc').innerHTML = options(active(M.locations).filter(l => String(l.is_quarantine) !== 'true'), 'id', l => l.location_code + ' ' + l.name, '選択してください');
+}
+async function submitReturn() {
+  msg('rtMsg', '');
+  try {
+    const r = await call('registerReturn', { shipmentLineId: RT.lineId, quantity: $('rtQty').value, returnedOn: $('rtDate').value, reason: $('rtReason').value,
+      quarantineLocationId: $('rtQLoc').value, disposition: $('rtDisp').value, restockLocationId: $('rtRLoc').value });
+    msg('rtMsg', '返品を登録しました。返品番号 ' + r.returnNo + '／処置：' + (r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄') + (r.recall ? '（回収品として計上）' : ''));
+    $('rtReason').value = '';
+    findShipmentForReturn(true);
+  } catch (e) { err('rtMsg')(e); }
+}
+
+// ---------- 在庫 ----------
+async function loadInventory() {
+  try {
+    const rows = await call('getInventory');
+    $('invBody').innerHTML = table(['商品','ロット','仕入先ロット','保管場所','使用期限','残日数','状態','数量','引当可'],
+      rows.map(r => ({ cells: [r.product, r.lot_no, r.supplier_lot_no, r.location + (r.quarantine ? '（隔離）' : ''), r.expires_on, n(r.daysLeft),
+        h(badge(r.status, r.statusLabel)), n(r.qty), r.allocatable ? '○' : '×'] })), { empty: '在庫はありません' });
+  } catch (e) { $('invBody').innerHTML = '<div class="msg ng">' + esc(e.message || e) + '</div>'; }
+}
+
+// ---------- ロット追跡 ----------
+const MOVE_LABEL = { RECEIPT:'入荷', SHIPMENT:'出荷', CANCEL:'出荷取消', RETURN:'返品受入', TRANSFER_IN:'移動入', TRANSFER_OUT:'移動出', DISPOSE:'廃棄', ADJUST:'調整', SUPPLIER_RETURN:'仕入先返品' };
+async function searchLot() {
+  try {
+    const lots = await call('traceLot', $('tlQuery').value);
+    if (!lots.length) { $('tlBody').innerHTML = '<p class="muted">該当するロットはありません</p>'; return; }
+    $('tlBody').innerHTML = lots.map(l => {
+      const net = l.shipments.reduce((s, x) => s + x.net, 0);
+      return '<div class="box"><h3 style="margin-top:0">' + esc(l.lot_no) + '　' + badge(l.status, l.statusLabel) + '</h3>' +
+        '<p>商品：' + esc(l.product) + '　仕入先：' + esc(l.supplier) + '（仕入先ロット ' + esc(l.supplier_lot_no) + '）<br>' +
+        '製造日：' + esc(l.manufactured_on || '—') + '　使用期限：' + esc(l.expires_on) + '（残 ' + esc(l.daysLeft) + ' 日）　初回入荷：' + esc(l.received_on) +
+        '　現在庫：' + l.stock + '　顧客の手元（出荷正味）：<b>' + net + '</b></p>' +
+        '<p class="muted">受払：' + Object.keys(l.movementTotals).map(k => esc(MOVE_LABEL[k] || k) + ' ' + l.movementTotals[k]).join('　') + '</p>' +
+        '<h3>出荷先</h3>' + table(['顧客コード','顧客','電話','メール','出荷番号','出荷日','状態','出荷数','返品','回収','正味'],
+          l.shipments.map(s => ({ cells: [s.customer_code, s.customer, s.phone, s.email, s.shipment_no, s.shipped_on, s.status === 'SHIPPED' ? '出荷済' : '取消',
+            n(s.quantity), n(s.returned), n(s.recalled), n(s.net)] })), { empty: '出荷実績はありません' }) +
+        '<h3>保管場所別在庫</h3>' + table(['保管場所','数量'], l.inventory.map(i => ({ cells: [i.location, n(i.qty)] })), { empty: '在庫なし' }) +
+        '<h3>ステータス履歴</h3>' + table(['日時','変更前','変更後','理由','実行者'], l.history.map(x => ({ cells: [x.changed_at, code('lot_status', x.from_status), code('lot_status', x.to_status), x.reason, x.changed_by] }))) +
+        '</div>';
+    }).join('');
+  } catch (e) { $('tlBody').innerHTML = '<div class="msg ng">' + esc(e.message || e) + '</div>'; }
+}
+
+// ---------- 顧客追跡 ----------
+async function searchCustomer() {
+  try {
+    const r = await call('traceCustomer', $('tcCustomer').value, $('tcFrom').value, $('tcTo').value);
+    const c = r.customer;
+    $('tcBody').innerHTML = '<p>' + esc(c.customer_code) + '　' + esc(c.name) + '（' + esc(code('customer_type', c.customer_type)) + '）　' + esc(c.address) + '　' + esc(c.phone || '') + '　' + esc(c.email || '') + '</p>' +
+      table(['出荷日','出荷番号','商品','ロット','仕入先ロット','使用期限','ロット状態','出荷数','返品','正味'],
+        r.rows.map(x => ({ cells: [x.shipped_on, x.shipment_no, x.product, x.lot_no, x.supplier_lot_no, x.expires_on, h(badge(x.lot_status, x.lot_status_label)),
+          n(x.quantity), n(x.returned), n(x.net)] })), { empty: '出荷実績はありません' });
+  } catch (e) { $('tcBody').innerHTML = '<div class="msg ng">' + esc(e.message || e) + '</div>'; }
+}
+
+// ---------- 回収 ----------
+async function loadRecalls() {
+  try {
+    const [lots, recalls] = await Promise.all([call('getLots', ['QUARANTINE','RELEASED','HOLD','REJECTED','EXPIRED']), call('listRecalls')]);
+    $('rcLots').innerHTML = options(lots, 'id', l => l.lot_no + ' ' + l.product + '（' + l.statusLabel + '／期限 ' + l.expires_on + '）');
+    $('rclList').innerHTML = recalls.map(r => '<div class="box"><h3 style="margin-top:0">' + esc(r.recall_no) + '　' + esc(r.title) + '　<span class="badge">' +
+      ({ OPEN:'登録', IN_PROGRESS:'対応中', CLOSED:'完了' }[r.status] || r.status) + '</span></h3>' +
+      '<p>重大度：クラス' + esc(r.severity) + '　開始：' + esc(r.started_on) + (r.closed_on ? '　完了：' + esc(r.closed_on) : '') + '　対象ロット：' + esc(r.lots.join(', ')) +
+      '　連絡済率 ' + r.contactedRate + '%　回収率 ' + r.recoveredRate + '%　対象ロット残在庫 ' + r.remainingStock + '<br><span class="muted">' + esc(r.reason) + '</span></p>' +
+      table(['顧客','担当者','電話','メール','ロット','出荷正味','回収数','回収不能','連絡日','連絡方法','状態','クローズ理由',''],
+        r.targets.map(t => {
+          const ed = r.status !== 'CLOSED';
+          return { cells: [t.customer, t.contact_name, t.phone, t.email, t.lot_no, n(t.shipped_qty), n(t.recovered_qty),
+            ed ? h('<input type="number" min="0" style="width:60px" id="un_' + t.id + '" value="' + esc(t.unrecoverable_qty) + '">') : n(t.unrecoverable_qty),
+            ed ? h('<input type="date" id="cd_' + t.id + '" value="' + esc(t.contacted_on) + '">') : t.contacted_on,
+            ed ? h('<select id="cm_' + t.id + '">' + ['','電話','メール','訪問'].map(m => '<option' + (m === t.contact_method ? ' selected' : '') + '>' + m + '</option>').join('') + '</select>') : t.contact_method,
+            ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED' ? h(badge(t.status, t.statusLabel) + '<br><select id="st_' + t.id + '"><option value="">（変更なし）</option><option value="CONTACTED">連絡済</option><option value="CLOSED">クローズ</option></select>') : h(badge(t.status, t.statusLabel)),
+            ed ? h('<input id="cr_' + t.id + '" value="' + esc(t.close_reason) + '" placeholder="クローズ時必須">') : t.close_reason,
+            ed ? h('<button class="btn sub" onclick="saveTarget(' + t.id + ')">保存</button>') : ''] };
+        }), { empty: '対象顧客はいません（出荷実績なし）' }) +
+      (r.status !== 'CLOSED' ? '<div class="actions"><button class="btn sub" onclick="reextract(' + r.id + ')">対象を再抽出</button><button class="btn" onclick="closeRecallCase(' + r.id + ')">回収完了</button>' +
+        '<span class="muted">回収品の受入は「返品」画面で登録すると回収数に自動反映されます</span></div>' : '') + '</div>').join('');
+  } catch (e) { err('rclMsg')(e); }
+}
+async function submitRecall() {
+  msg('rclMsg', '');
+  const lotIds = [...$('rcLots').selectedOptions].map(o => o.value);
+  if (!confirm('選択したロット（' + lotIds.length + '件）を回収対象にし、出荷を停止します。よろしいですか？')) return;
+  try {
+    const r = await call('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds: lotIds });
+    msg('rclMsg', '回収案件 ' + r.recall_no + ' を登録しました。対象顧客 ' + r.targets.filter(t => Number(t.shipped_qty) > 0).length + ' 件');
+    $('rcTitle').value = ''; $('rcReason').value = ''; $('rcSev').value = '';
+    loadRecalls();
+  } catch (e) { err('rclMsg')(e); }
+}
+async function saveTarget(id) {
+  msg('rclMsg', '');
+  try {
+    const st = $('st_' + id);
+    await call('updateRecallTarget', { targetId: id, contactedOn: $('cd_' + id).value, contactMethod: $('cm_' + id).value,
+      unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value });
+    msg('rclMsg', '保存しました。'); loadRecalls();
+  } catch (e) { err('rclMsg')(e); }
+}
+async function reextract(id) { try { await call('reextractRecall', id); msg('rclMsg', '再抽出しました。'); loadRecalls(); } catch (e) { err('rclMsg')(e); } }
+async function closeRecallCase(id) {
+  if (!confirm('回収案件を完了にします。よろしいですか？')) return;
+  try { const r = await call('closeRecall', id); msg('rclMsg', '回収案件を完了しました。' + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok'); loadRecalls(); }
+  catch (e) { err('rclMsg')(e); }
+}
+
+// ---------- マスタ ----------
+const MASTER_FIELDS = {
+  m_product: [['product_code','商品コード'],['name','商品名'],['storage_class','保管温度区分','code:storage_class'],['shelf_life_days','有効期間（日）','number'],
+    ['min_remaining_days','最低出荷残期間（日）','number'],['regulatory_class','規制区分','code:regulatory_class'],['list_price','標準売価（円・税抜）','number'],
+    ['reorder_point','発注点','number'],['is_active','有効','bool']],
+  m_customer: [['customer_code','顧客コード'],['name','顧客名'],['customer_type','顧客区分','code:customer_type'],['medical_inst_code','医療機関コード'],
+    ['address','住所'],['contact_name','担当者名'],['phone','電話番号'],['email','メール（回収連絡先）'],['is_active','有効','bool']],
+  m_supplier: [['supplier_code','仕入先コード'],['name','仕入先名'],['contact_name','担当者名'],['phone','電話番号'],['email','メール'],['is_active','有効','bool']],
+  m_location: [['location_code','保管場所コード'],['name','保管場所名'],['storage_class','保管温度区分','code:storage_class'],['temp_min','許容温度下限（℃）','number'],
+    ['temp_max','許容温度上限（℃）','number'],['is_quarantine','隔離保管場所（返品・保留用）','bool'],['is_active','有効','bool']],
+};
+const MASTER_KEY = { m_product: 'products', m_customer: 'customers', m_supplier: 'suppliers', m_location: 'locations' };
+function loadMasterList() {
+  const t = $('msTable').value, f = MASTER_FIELDS[t];
+  $('msForm').style.display = 'none';
+  $('msList').innerHTML = table(f.map(x => x[1]), M[MASTER_KEY[t]].map(r => ({ attrs: ' class="clickable" onclick="editMaster(' + r.id + ')"',
+    cells: f.map(([k, , type]) => type === 'bool' ? (String(r[k]) === 'true' ? '○' : '') : type && type.indexOf('code:') === 0 ? code(type.slice(5), r[k]) : r[k]) })),
+    { empty: '登録されていません。「＋ 新規」から登録してください' }) + '<p class="muted">行をクリックすると編集できます</p>';
+}
+function editMaster(id) {
+  const t = $('msTable').value, f = MASTER_FIELDS[t];
+  const r = id ? M[MASTER_KEY[t]].find(x => String(x.id) === String(id)) : { is_active: true, min_remaining_days: 90 };
+  $('msForm').style.display = 'block';
+  $('msForm').innerHTML = '<div class="grid">' + f.map(([k, label, type]) => {
+    const v = r[k] === undefined ? '' : r[k];
+    if (type === 'bool') return '<label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="mf_' + k + '"' + (String(v) === 'true' ? ' checked' : '') + '>' + esc(label) + '</label>';
+    if (type && type.indexOf('code:') === 0) {
+      const codes = CFG.codes[type.slice(5)];
+      return '<label>' + esc(label) + '<select id="mf_' + k + '"><option value="">選択</option>' + Object.keys(codes).map(c => '<option value="' + c + '"' + (c === v ? ' selected' : '') + '>' + esc(codes[c]) + '</option>').join('') + '</select></label>';
+    }
+    return '<label>' + esc(label) + '<input id="mf_' + k + '"' + (type === 'number' ? ' type="number" step="any"' : '') + ' value="' + esc(v) + '"></label>';
+  }).join('') + '</div><div class="actions"><button class="btn" onclick="saveMasterForm(' + (id || 'null') + ')">保存</button>' +
+    '<button class="btn sub" onclick="$(\'msForm\').style.display=\'none\'">閉じる</button></div>';
+}
+async function saveMasterForm(id) {
+  const t = $('msTable').value, data = { id: id };
+  MASTER_FIELDS[t].forEach(([k, , type]) => { data[k] = type === 'bool' ? $('mf_' + k).checked : $('mf_' + k).value; });
+  try {
+    await call('saveMaster', t, data);
+    msg('msMsg', '保存しました。');
+    await reloadMasters(); loadMasterList();
+  } catch (e) { err('msMsg')(e); }
+}
+function loadRules() {
+  const rc = CFG.codes.regulatory_class, ct = CFG.codes.customer_type;
+  $('ruleBody').innerHTML = '<table><thead><tr><th>規制区分＼顧客区分</th>' + Object.keys(ct).map(c => '<th>' + esc(ct[c]) + '</th>').join('') + '</tr></thead><tbody>' +
+    Object.keys(rc).map(r => '<tr><td>' + esc(rc[r]) + '</td>' + Object.keys(ct).map(c => {
+      const rule = M.salesRules.find(x => x.regulatory_class === r && x.customer_type === c);
+      return '<td style="text-align:center"><input type="checkbox"' + (rule && String(rule.allowed) === 'true' ? ' checked' : '') +
+        ' onchange="saveRule(\'' + r + '\',\'' + c + '\',this.checked)"></td>';
+    }).join('') + '</tr>').join('') + '</tbody></table>';
+}
+async function saveRule(r, c, allowed) {
+  try { await call('saveSalesRule', r, c, allowed); M = await call('getMasters'); msg('msMsg', '販売可否ルールを更新しました。'); }
+  catch (e) { err('msMsg')(e); }
+}
+
+// ---------- 起動 ----------
+(async function init() {
+  $('nav').innerHTML = TABS.map(([id, label]) => '<button data-tab="' + id + '" onclick="showTab(\'' + id + '\')">' + label + '</button>').join('');
+  try {
+    CFG = await call('getConfig');
+    $('who').textContent = CFG.user;
+    ['rcDate','shDate'].forEach(id => { $(id).value = CFG.today; });
+    await reloadMasters();
+    $('rcProduct').onchange = () => { fillReceiptLocations(); autoExpiry(); };
+    $('rcMfg').onchange = autoExpiry;
+    $('rcExp').oninput = () => { $('rcExp').dataset.manual = '1'; };
+    addShipLine();
+    showTab('dashboard');
+  } catch (e) {
+    document.querySelector('main').innerHTML = '<div class="msg ng">' + esc(e.message || e) + '\n\nメニュー「EXO-TRACE」>「初期設定（シート作成）」を実行してから開き直してください。</div>';
+  }
+})();
+</script>
+</body>
+</html>

@@ -26,3 +26,13 @@ python sql_scenario.py | psql -v ON_ERROR_STOP=1 <DDL適用済みの空DB>
 
 xlsx を直接編集すると次回の生成で上書きされます。変更は `spec.py` に入れてください
 （課題一覧の「ステータス」「回答」欄だけは記入用です。決まった内容は `spec.py` に反映してください）。
+
+## 簡易版（Google スプレッドシート＋Apps Script）
+
+| ファイル | 内容 |
+|---|---|
+| `apps-script/コード.gs` | サーバー側（シート＝テーブル、入荷・検品・FEFO出荷・返品・追跡・回収・日次チェック） |
+| `apps-script/index.html` | 操作画面 |
+| `apps-script/test/` | モック環境でのテスト（`node apps-script/test/mock_test.js`、画面は `NODE_PATH=$(npm root -g) node apps-script/test/ui_test.js`） |
+
+導入手順：スプレッドシートで「拡張機能 > Apps Script」→ `コード.gs` を貼り付け → 「＋ > HTML」で `index` を作成し `index.html` を貼り付け → 保存してスプレッドシートを再読込 → メニュー「EXO-TRACE > 初期設定」→「画面を開く」。
