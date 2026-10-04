@@ -425,7 +425,14 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .disclosure summary::-webkit-details-marker { display: none; }
 .disclosure[open] .chev { transform: rotate(45deg); }
 .chev { transition: transform .2s; color: var(--brand); }
-.target-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 10px; }
+.target-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
+.target-grid .f-date, .target-grid .f-status { grid-column: 1 / -1; }
+.target-edit { margin-top: 10px; }
+.target-edit summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--brand); min-height: var(--tap); display: flex; align-items: center; list-style: none; }
+.target-edit summary::-webkit-details-marker { display: none; }
+.target-edit summary::before { content: "＋"; margin-right: 6px; }
+.target-edit[open] summary::before { content: "－"; }
+.target-edit .target-grid { margin-top: 0; }
 .target-grid .span-reason, .target-grid .span-save { grid-column: 1 / -1; }
 .li { display: grid; }
 .li + .li { margin-top: 6px; }
@@ -494,9 +501,8 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
   .line .line-remove { grid-column: auto; }
   .lot-card .lot-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .lot-card .lot-action { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto auto; align-items: end; }
-  .target-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; }
-  .target-grid .span-reason { grid-column: span 3; }
-  .target-grid .span-save { grid-column: auto; }
+  .target-grid { align-items: end; }
+  .target-grid .f-date, .target-grid .f-status { grid-column: auto; }
   .sheet-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .stat-row:not(.three) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
@@ -614,3 +620,29 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .field-hint { font-size: 12px; color: var(--text-2); min-height: 18px; }
 
 .card.card-flush { padding: 0; }
+
+@media (min-width: 1280px) {
+  .target-grid { grid-template-columns: minmax(11.5rem, 1.2fr) repeat(3, minmax(0, 1fr)); }
+  .target-grid .span-reason { grid-column: span 3; }
+  .target-grid .span-save { grid-column: auto; }
+}
+/* カード表示の1行目：主項目＋状態バッジ */
+.card-status { display: none; }
+@media (max-width: 767.98px) {
+  .rtable td.primary { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; grid-column: 1 / -1; }
+  .rtable td.status { display: none; }
+  .rtable td .mono { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (min-width: 768px) and (max-width: 1279.98px) {
+  .rtable.wide-table td.primary { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; grid-column: 1 / -1; }
+  .rtable.wide-table td.status { display: none; }
+  .rtable.wide-table td .mono { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (max-width: 767.98px) { .card-status { display: flex; } }
+@media (min-width: 768px) and (max-width: 1279.98px) { .rtable.wide-table .card-status { display: flex; } }
+.card-status { flex-wrap: wrap; justify-content: flex-end; gap: 4px; flex: none; max-width: 60%; font-weight: 400; }
+.card-status .badge { font-size: 11px; padding: 2px 8px; }
+/* デスクトップの表は縦中央揃え、日付入力の高さを他の入力と揃える */
+@media (min-width: 768px) { .rtable:not(.wide-table) td { vertical-align: middle; } }
+@media (min-width: 1280px) { .rtable.wide-table td { vertical-align: middle; } }
+@media (min-width: 1024px) { input[type="date"] { min-height: 40px; } }

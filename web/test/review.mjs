@@ -130,6 +130,16 @@ function audit(opts) {
     if (!visible(el) || getComputedStyle(el).overflowY !== 'visible') return;
     if (el.scrollHeight > el.clientHeight + 2) issues.push({ type: 'content-overflow', detail: `${desc(el)} の中身が枠から ${el.scrollHeight - el.clientHeight}px はみ出す` });
   });
+  // 3d) セルの中身が隣のセルへはみ出す（カード表示の2列グリッド等）
+  scope.querySelectorAll('.rtable td, .target-grid > *, .form-grid > *, .lot-meta > div, .stat-row > *').forEach((el) => {
+    if (!visible(el)) return;
+    const r = el.getBoundingClientRect();
+    el.querySelectorAll('*').forEach((c) => {
+      if (!visible(c) || c.closest('svg')) return;
+      const cr = c.getBoundingClientRect();
+      if (cr.right > r.right + 1.5) issues.push({ type: 'cell-overflow', detail: `${desc(c)} が ${desc(el)} の右端から ${Math.round(cr.right - r.right)}px はみ出す` });
+    });
+  });
   // 3b) 隣接要素の重なり（負のマージン等による食い込み）
   scope.querySelectorAll('#main *, dialog[open] *').forEach((el) => {
     const next = el.nextElementSibling;
