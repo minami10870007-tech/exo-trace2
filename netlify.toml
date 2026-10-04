@@ -47,3 +47,9 @@
   [headers.values]
     Cache-Control = "no-cache"
     Content-Type = "application/manifest+json; charset=utf-8"
+
+# 利用者登録ページ（ハッシュなしのファイル名のため常に最新を確認）
+[[headers]]
+  for = "/tools/*"
+  [headers.values]
+    Cache-Control = "no-cache"

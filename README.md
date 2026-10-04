@@ -51,7 +51,8 @@ xlsx を直接編集すると次回の生成で上書きされます。変更は
 | `netlify/functions/api.mjs` | `/api`：ログイン（メール＋パスワード、12時間有効の署名付きトークン）と Apps Script への中継 |
 | `web/src/` | 画面（index.html / styles.css / app.js / PWA マニフェスト・アイコン） |
 | `web/build.mjs` | `web/dist` を生成（CSS/JS にハッシュを付けて長期キャッシュ） |
-| `scripts/hash-password.mjs` | 利用者登録用の文字列を作成 |
+| `web/src/tools/user-hash.html` | 利用者登録ページ（ブラウザ内で EXO_USERS の文字列を作成。PBKDF2-SHA256） |
+| `scripts/hash-password.mjs` | 利用者登録用の文字列を作成（ターミナル版。scrypt） |
 | `web/test/` | ローカル検証サーバーとデザイン・レスポンシブ自動レビュー |
 
 ### デプロイ手順
@@ -61,14 +62,15 @@ xlsx を直接編集すると次回の生成で上書きされます。変更は
    2. スプレッドシートのメニュー「EXO-TRACE > Netlify 連携シークレットの表示」で表示された値を控える
    3. 「デプロイ > 新しいデプロイ > 種類：ウェブアプリ」、実行ユーザー＝**自分**、アクセスできるユーザー＝**全員** でデプロイし、URL（…/exec）を控える
       （画面は公開されません。`doGet` は文字列を返すだけで、`doPost` はシークレットが一致する要求しか処理しません）
-2. **利用者の登録文字列を作成**（人数分）：`node scripts/hash-password.mjs taro@example.com 'パスワード12文字以上'`
+2. **利用者の登録文字列を作成**：ブラウザで `tools/user-hash.html`（デプロイ後は `https://<サイト>/tools/user-hash.html`）を開き、メールアドレスとパスワードを入力して「登録用の文字列を作る」。計算はブラウザ内だけで行われ、送信されません。
+   （ターミナルを使う場合：`node scripts/hash-password.mjs taro@example.com 'パスワード12文字以上'`。どちらの形式も混在可）
 3. **Netlify**：このリポジトリを「Add new site > Import an existing project」で接続（ビルド設定は `netlify.toml` から自動で読まれます）し、環境変数を設定
    | 変数 | 値 |
    |---|---|
    | `GAS_URL` | 手順1-3 の URL |
    | `GAS_SECRET` | 手順1-2 の値 |
    | `SESSION_SECRET` | ランダムな長い文字列（例：`openssl rand -hex 32`） |
-   | `EXO_USERS` | 手順2 の出力をセミコロン `;` 区切りで連結 |
+   | `EXO_USERS` | 手順2 で作った値（複数人はセミコロン `;` 区切り。登録ページは自動で連結） |
 4. デプロイ後、サイトにアクセスしてログイン。スマホではブラウザの「ホーム画面に追加」でアプリのように使えます。
 
 ### ローカルで確認・レビュー

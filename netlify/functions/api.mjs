@@ -6,7 +6,9 @@
 //   GAS_URL         Apps Script ウェブアプリの URL（…/exec）
 //   GAS_SECRET      Apps Script のスクリプトプロパティ API_SECRET と同じ値
 //   SESSION_SECRET  セッショントークン署名用のランダム文字列（32文字以上）
-//   EXO_USERS       利用者一覧。"メール:ソルト:ハッシュ" をセミコロン区切り（scripts/hash-password.mjs で作成）
+//   EXO_USERS       利用者一覧（セミコロン区切り）。次のどちらかの形式
+//                     "メール:ソルト:ハッシュ"                         … scripts/hash-password.mjs（scrypt）で作成
+//                     "メール:pbkdf2-sha256:反復回数:ソルト:ハッシュ"  … ブラウザの登録ページ（tools/user-hash.html）で作成
 import crypto from 'node:crypto';
 
 const TOKEN_TTL_SEC = 12 * 60 * 60;
@@ -48,15 +50,25 @@ function verify(token) {
 
 function findUser(email) {
   return env('EXO_USERS').split(';').map((s) => s.trim()).filter(Boolean).map((entry) => {
-    const [mail, salt, hash] = entry.split(':');
-    return { email: (mail || '').toLowerCase(), salt, hash };
+    const parts = entry.split(':');
+    const mail = (parts[0] || '').trim().toLowerCase();
+    if (parts[1] === 'pbkdf2-sha256') return { email: mail, algo: 'pbkdf2', iterations: Number(parts[2]), salt: parts[3], hash: parts[4] };
+    return { email: mail, algo: 'scrypt', salt: parts[1], hash: parts[2] };
   }).find((u) => u.email === email);
 }
 
+const MAX_PBKDF2_ITERATIONS = 5000000;
+
 function checkPassword(user, password) {
   // 存在しないユーザーでも同じ計算を行い、応答時間から登録有無を推測されないようにする
-  const salt = user?.salt || '00000000000000000000000000000000';
-  const derived = crypto.scryptSync(String(password), Buffer.from(salt, 'hex'), 32);
+  const salt = Buffer.from(user?.salt || '00000000000000000000000000000000', 'hex');
+  let derived;
+  if (user && user.algo === 'pbkdf2') {
+    if (!(user.iterations >= 100000 && user.iterations <= MAX_PBKDF2_ITERATIONS)) return false;
+    derived = crypto.pbkdf2Sync(String(password), salt, user.iterations, 32, 'sha256');
+  } else {
+    derived = crypto.scryptSync(String(password), salt, 32);
+  }
   const stored = Buffer.from(user?.hash || '', 'hex');
   return !!user && stored.length === derived.length && crypto.timingSafeEqual(stored, derived);
 }
