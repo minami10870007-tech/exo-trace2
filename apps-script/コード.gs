@@ -376,7 +376,7 @@ function shipmentView_(T, s) {
     const lot = T.t_lot.byId(l.lot_id) || {};
     const p = T.m_product.byId(l.product_id) || {};
     const returned = returnedQty_(T, l.id);
-    return { id: l.id, product: p.name, lot_no: lot.lot_no, expires_on: lot.expires_on, lot_status: lotLabel_(lot.status),
+    return { id: l.id, product: p.name, lot_no: lot.lot_no, expires_on: lot.expires_on, lot_status: lotLabel_(lot.status), lot_status_code: lot.status,
       quantity: num_(l.quantity), unit_price: num_(l.unit_price), returned: returned, returnable: l.status === 'SHIPPED' ? num_(l.quantity) - returned : 0,
       status: l.status };
   });

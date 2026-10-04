@@ -33,6 +33,7 @@
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
 </svg>
 
 <div class="progress" id="progress" aria-hidden="true"></div>
@@ -55,7 +56,7 @@
     <nav class="side-nav" id="sideNav"></nav>
     <div class="side-foot">
       <div class="who" id="whoSide"></div>
-      <button class="btn btn-ghost btn-sm" type="button" data-action="logout"><svg class="ic"><use href="#i-logout"/></svg>ログアウト</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-action="logout" aria-label="ログアウト"><svg class="ic"><use href="#i-logout"/></svg><span>ログアウト</span></button>
     </div>
   </aside>
 
@@ -78,20 +79,25 @@
       <form class="card" id="receiptForm" novalidate>
         <h2 class="card-title">入荷登録</h2>
         <p class="card-sub">入荷したロットは「検品待ち」になり、QAの合格判定後に出荷できます。</p>
+        <h3 class="section-title">商品とロット</h3>
         <div class="form-grid">
           <div class="field"><label for="rcSupplier">仕入先</label><select id="rcSupplier" required></select></div>
-          <div class="field"><label for="rcProduct">商品</label><select id="rcProduct" required></select></div>
+          <div class="field span-2"><label for="rcProduct">商品</label><select id="rcProduct" required></select></div>
           <div class="field"><label for="rcSupLot">仕入先ロット番号</label><input id="rcSupLot" autocomplete="off" autocapitalize="characters" required></div>
-          <div class="field"><label for="rcDate">入荷日</label><input id="rcDate" type="date" required></div>
           <div class="field"><label for="rcMfg">製造日 <span class="opt">任意</span></label><input id="rcMfg" type="date"></div>
-          <div class="field"><label for="rcExp">使用期限</label><input id="rcExp" type="date" required><small>製造日＋有効期間を自動入力</small></div>
+          <div class="field"><label for="rcExp">使用期限</label><input id="rcExp" type="date" required></div>
+        </div>
+        <p class="note">製造日を入れると、使用期限に「製造日＋有効期間」が自動で入ります。</p>
+        <h3 class="section-title">入荷内容</h3>
+        <div class="form-grid">
+          <div class="field"><label for="rcDate">入荷日</label><input id="rcDate" type="date" required></div>
           <div class="field"><label for="rcQty">入荷数量</label><input id="rcQty" type="number" inputmode="numeric" min="1" step="1" required></div>
           <div class="field"><label for="rcPrice">仕入単価（円・税抜）</label><input id="rcPrice" type="number" inputmode="decimal" min="0" step="0.01" required></div>
           <div class="field"><label for="rcTemp">到着時温度（℃） <span class="opt">任意</span></label><input id="rcTemp" type="number" inputmode="decimal" step="0.1"></div>
-          <div class="field"><label for="rcLoc">入庫保管場所</label><select id="rcLoc" required></select></div>
+          <div class="field span-2"><label for="rcLoc">入庫保管場所</label><select id="rcLoc" required></select></div>
         </div>
         <div id="rcMsg"></div>
-        <div class="form-actions"><button class="btn btn-primary" type="submit">入荷を確定</button></div>
+        <div class="form-actions sticky-actions"><button class="btn btn-primary" type="submit">入荷を確定</button></div>
       </form>
     </section>
 
@@ -120,7 +126,7 @@
         <div class="lines" id="shLines"></div>
         <button class="btn btn-secondary btn-sm" type="button" data-action="addLine"><svg class="ic"><use href="#i-plus"/></svg>明細を追加</button>
         <div id="shMsg"></div>
-        <div class="form-actions"><button class="btn btn-primary" type="submit">出荷を確定</button></div>
+        <div class="form-actions sticky-actions"><button class="btn btn-primary" type="submit">出荷を確定</button></div>
       </form>
       <div class="card">
         <h2 class="card-title">最近の出荷</h2>
@@ -145,7 +151,7 @@
           <div class="field"><label for="rtQty">返品数量</label><input id="rtQty" type="number" inputmode="numeric" min="1" step="1" required></div>
           <div class="field"><label for="rtDate">返品日</label><input id="rtDate" type="date" required></div>
           <div class="field"><label for="rtQLoc">受入保管場所（隔離）</label><select id="rtQLoc" required></select></div>
-          <div class="field"><label for="rtDisp">処置</label><select id="rtDisp"><option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></div>
+          <div class="field"><label for="rtDisp">処置</label><select id="rtDisp" required><option value="">選択してください</option><option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></div>
           <div class="field" id="rtRLocWrap" hidden><label for="rtRLoc">戻し保管場所</label><select id="rtRLoc"></select></div>
           <div class="field span-full"><label for="rtReason">返品理由</label><textarea id="rtReason" rows="3" required></textarea></div>
         </div>
@@ -158,7 +164,7 @@
     <section class="page" id="page-inventory" hidden>
       <div class="toolbar">
         <label class="sr-only" for="invFilter">絞り込み</label>
-        <input id="invFilter" type="search" placeholder="商品名・ロット番号で絞り込み" autocomplete="off">
+        <input id="invFilter" type="search" placeholder="商品・ロットで絞り込み" autocomplete="off">
         <label class="check"><input type="checkbox" id="invAvail"><span>引当可のみ</span></label>
       </div>
       <div class="card card-flush" id="invBody"></div>

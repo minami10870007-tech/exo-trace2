@@ -24,7 +24,9 @@ const VIEWPORTS = [
 // ---------------- ブラウザ内で実行する監査 ----------------
 function audit(opts) {
   const issues = [];
-  const vw = window.innerWidth;
+  // モバイルではページが広がるとブラウザが縮小表示して innerWidth も広がるため、指定した画面幅で判定する
+  const vw = opts.vw;
+  if (window.innerWidth > vw + 1) issues.push({ type: 'overflow', detail: `表示領域が ${window.innerWidth}px に広がっている（画面 ${vw}px）` });
   const visible = (el) => {
     if (el.closest('[hidden]') || el.closest('dialog:not([open])')) return false;
     const r = el.getBoundingClientRect();
@@ -101,7 +103,7 @@ function audit(opts) {
   const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
   const seen = new Set();
   scope.querySelectorAll('body *').forEach((el) => {
-    if (!visible(el) || el.closest('svg')) return;
+    if (!visible(el) || el.closest('svg') || el.closest(':disabled')) return; // 無効化された操作部品は WCAG のコントラスト要件の対象外
     const hasText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) ||
       (el.matches('input:not([type="checkbox"]):not([type="radio"]), select, textarea') && (el.value || el.placeholder));
     if (!hasText) return;
@@ -194,7 +196,7 @@ const SCENES = [
   ['master-rules', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="rules"]'); }],
   ['master-dialog', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="m_product"]'); await idle(p); await p.click('#msList tr[data-action]'); }],
   ['confirm-dialog', async (p) => { await p.goto(server.url + '/#/shipment'); await idle(p); await p.click('[data-action="cancelShip"]'); }],
-  ['menu-sheet', async (p, vp) => { if (vp.width >= 1024) return 'skip'; await p.goto(server.url + '/#/dashboard'); await idle(p); await p.click('#moreBtn'); }],
+  ['menu-sheet', async (p, vp) => { if (vp.width >= 768) return 'skip'; await p.goto(server.url + '/#/dashboard'); await idle(p); await p.click('#moreBtn'); }],
 ];
 
 for (const vp of VIEWPORTS) {
@@ -210,7 +212,7 @@ for (const vp of VIEWPORTS) {
       await idle(page);
       await page.waitForTimeout(250);
     }
-    const issues = await page.evaluate(audit, { mobile: vp.mobile, dark: !!vp.dark });
+    const issues = await page.evaluate(audit, { mobile: vp.mobile, dark: !!vp.dark, vw: vp.width });
     await page.screenshot({ path: join(OUT, `${vp.name}__${name}.png`), fullPage: !(await page.$('dialog[open]')) && name !== 'menu-sheet' });
     if (await page.$('dialog[open]')) await page.keyboard.press('Escape');
     if (name === 'menu-sheet') await page.click('[data-action="closeSheet"]');
@@ -245,7 +247,13 @@ for (const vp of VIEWPORTS) {
   await step('メニュー→検品→合格', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="inspect"]'); await idle(page);
     const card = page.locator('.lot-card', { hasText: 'FLOW-001' });
-    await card.locator('input[type="checkbox"]').check(); await card.locator('[data-action="changeStatus"]').click(); await waitText('#toasts', /合格/);
+    const btn = card.locator('[data-action="changeStatus"]');
+    if (!(await btn.isDisabled())) throw new Error('判定未選択でボタンが押せる');
+    await card.locator('select.insTo').selectOption('RELEASED');
+    if (!(await btn.isDisabled())) throw new Error('COA未確認でボタンが押せる');
+    await card.locator('input[type="checkbox"]').check();
+    if ((await btn.textContent()).trim() !== '合格にする') throw new Error('ボタン文言: ' + (await btn.textContent()));
+    await btn.click(); await waitText('#toasts', /合格/);
     if (!/合格/.test(await toastText())) throw new Error(await page.textContent('#insMsg'));
   });
   await step('出荷（確認ダイアログ）', async () => {
