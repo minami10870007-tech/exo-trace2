@@ -735,6 +735,8 @@ CREATE TABLE t_recall_target (
   contacted_on DATE,
   contact_method VARCHAR(20),
   recovered_qty INTEGER NOT NULL DEFAULT 0,
+  unrecoverable_qty INTEGER NOT NULL DEFAULT 0,
+  close_reason VARCHAR(200),
   status VARCHAR(20) NOT NULL DEFAULT 'NOT_CONTACTED',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by BIGINT NOT NULL REFERENCES m_user(id),
@@ -752,6 +754,8 @@ COMMENT ON COLUMN t_recall_target.shipped_qty IS '出荷正味数量';
 COMMENT ON COLUMN t_recall_target.contacted_on IS '連絡日';
 COMMENT ON COLUMN t_recall_target.contact_method IS '連絡方法';
 COMMENT ON COLUMN t_recall_target.recovered_qty IS '回収数量';
+COMMENT ON COLUMN t_recall_target.unrecoverable_qty IS '回収不能数量';
+COMMENT ON COLUMN t_recall_target.close_reason IS 'クローズ理由';
 COMMENT ON COLUMN t_recall_target.status IS 'ステータス';
 COMMENT ON COLUMN t_recall_target.created_at IS '作成日時';
 COMMENT ON COLUMN t_recall_target.created_by IS '作成者';

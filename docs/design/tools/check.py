@@ -213,14 +213,14 @@ def run():
                 code = part.split("（")[0]
                 if code not in lot_codes and code != "":
                     add(f"[状態遷移] ロット状態 {code} がコード定義にない")
-    # 11b. MUST機能の業務画面には画面項目定義がある
+    # 11b. MUST機能の画面には画面項目定義がある（ログイン除く）
     item_screens = {i[0] for i in spec.SCREEN_ITEMS}
     cat = {sc[0]: sc[2] for sc in spec.SCREENS}
     for f in spec.FUNCTIONS:
         if f[4] != "MUST":
             continue
         for sid in ID_PATTERNS["screen"].findall(f[5]):
-            if cat.get(sid) in ("仕入", "ロット", "在庫", "販売", "トレース", "品質") and sid not in item_screens:
+            if sid != "SCR-00" and sid not in item_screens:  # ログイン画面のみ対象外
                 add(f"[画面項目] MUST機能 {f[0]} の画面 {sid} に画面項目定義がない")
 
     # 12. メッセージID接頭辞と種別の整合

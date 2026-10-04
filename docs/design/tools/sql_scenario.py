@@ -10,7 +10,8 @@ ASSERT 失敗時は psql がエラー終了する。最後に ROLLBACK するた
   顧客Bが1本を通常返品（隔離保管場所へ受入→廃棄）。L1 を回収開始。
   → 回収対象は A:3, B:3。
   回収中に B がさらに通常返品1本 → 再抽出で B:2。
-  A が回収品として3本返品 → 再抽出しても A:3 のまま（回収品は recovered_qty 側）。
+  C 向けに別途1本出荷（SH-5）→ 回収対象 C:1。その後 SH-5 を出荷取消 → 再抽出で C:0・CLOSED。
+  A が回収品として2本返品＋回収不能1本 → 再抽出しても A:3 のまま（回収品は recovered_qty 側）で RECOVERED。
   B が残り2本を通常返品 → 再抽出で B:0・CLOSED。
   別受注で1本を引当中（ALLOCATED）→ 在庫・引当の整合性チェック（SQL-04/05）は0件。
 """
@@ -66,15 +67,18 @@ INSERT INTO t_lot (lot_no,product_id,supplier_id,supplier_lot_no,expires_on,rece
 INSERT INTO t_receipt_line (receipt_id,product_id,supplier_lot_no,expires_on,lot_id,location_id,quantity,unit_price,created_by,updated_by)
  VALUES (1,1,'SUP-LOT-9','2028-09-30',1,1,10,10000,1,1);
 INSERT INTO t_sales_order (so_no,customer_id,ship_to_id,order_date,sales_user_id,created_by,updated_by) VALUES
- ('SO-1',1,1,'2026-10-02',1,1,1),('SO-2',2,2,'2026-10-02',1,1,1),('SO-3',3,3,'2026-10-02',1,1,1),('SO-4',3,3,'2026-10-04',1,1,1);
+ ('SO-1',1,1,'2026-10-02',1,1,1),('SO-2',2,2,'2026-10-02',1,1,1),('SO-3',3,3,'2026-10-02',1,1,1),('SO-4',3,3,'2026-10-04',1,1,1),
+ ('SO-5',3,3,'2026-10-03',1,1,1);
 INSERT INTO t_sales_order_line (sales_order_id,line_no,product_id,quantity,unit_price,created_by,updated_by) VALUES
- (1,1,1,3,30000,1,1),(2,1,1,4,30000,1,1),(3,1,1,2,30000,1,1),(4,1,1,1,30000,1,1);
+ (1,1,1,3,30000,1,1),(2,1,1,4,30000,1,1),(3,1,1,2,30000,1,1),(4,1,1,1,30000,1,1),(5,1,1,1,30000,1,1);
 INSERT INTO t_shipment (shipment_no,sales_order_id,customer_id,ship_to_id,shipped_on,status,created_by,updated_by) VALUES
  ('SH-1',1,1,1,'2026-10-03','SHIPPED',1,1),('SH-2',2,2,2,'2026-10-03','SHIPPED',1,1),
- ('SH-3',3,3,3,'2026-10-03','CANCELLED',1,1),('SH-4',4,3,3,'2026-10-05','ALLOCATED',1,1);
+ ('SH-3',3,3,3,'2026-10-03','CANCELLED',1,1),('SH-4',4,3,3,'2026-10-05','ALLOCATED',1,1),
+ ('SH-5',5,3,3,'2026-10-03','SHIPPED',1,1);
 INSERT INTO t_shipment_line (shipment_id,sales_order_line_id,product_id,lot_id,location_id,quantity,unit_price,unit_cost,status,created_by,updated_by) VALUES
  (1,1,1,1,1,3,30000,10000,'SHIPPED',1,1),(2,2,1,1,1,4,30000,10000,'SHIPPED',1,1),
- (3,3,1,1,1,2,30000,10000,'CANCELLED',1,1),(4,4,1,1,1,1,30000,NULL,'ALLOCATED',1,1);
+ (3,3,1,1,1,2,30000,10000,'CANCELLED',1,1),(4,4,1,1,1,1,30000,NULL,'ALLOCATED',1,1),
+ (5,5,1,1,1,1,30000,10000,'SHIPPED',1,1);
 """
 
 
@@ -85,11 +89,13 @@ def scenario():
     out.append(mv("SHIPMENT", 1, -4, "shipment_line", 2))
     out.append(mv("SHIPMENT", 1, -2, "shipment_line", 3))
     out.append(mv("CANCEL", 1, 2, "shipment_line", 3))
+    out.append(mv("SHIPMENT", 1, -1, "shipment_line", 5))
     out.append("UPDATE t_inventory SET allocated_qty = 1 WHERE lot_id = 1 AND location_id = 1;\n")  # SH-4 の引当
     out.append(ret("RT-1", 2, 1))
 
     out.append(f"CREATE TEMP TABLE r1 AS {sub(SQL['SQL-01'], lot_id='1')};\n")
-    out.append(check("SELECT count(*) FROM r1", "= 2", "SQL-01: 取消出荷を除き2行"))
+    out.append(check("SELECT count(*) FROM r1", "= 4", "SQL-01: 出荷後取消(SH-3)を含み、引当のみ(SH-4)を除く4行"))
+    out.append(check("SELECT net_qty FROM r1 WHERE shipment_no='SH-3'", "= 0", "SQL-01: 取消済は正味0"))
     out.append(check("SELECT net_qty FROM r1 WHERE customer_code='C002'", "= 3", "SQL-01: B 正味3"))
     out.append(f"CREATE TEMP TABLE r2 AS {sub(SQL['SQL-02'], customer_id='2', **{'from': chr(39)+'2026-01-01'+chr(39), 'to': chr(39)+'2026-12-31'+chr(39)})};\n")
     out.append(check("SELECT net_qty FROM r2", "= 3", "SQL-02: B 正味3"))
@@ -100,7 +106,8 @@ def scenario():
     extract = sub(SQL["SQL-03"], recall_id="1", user_id="1") + ";\n"
     out += [extract, extract]
     tq = "SELECT shipped_qty FROM t_recall_target WHERE customer_id={c}"
-    out.append(check("SELECT count(*) FROM t_recall_target", "= 2", "SQL-03: 2件・再実行で重複なし"))
+    out.append(check("SELECT count(*) FROM t_recall_target", "= 3", "SQL-03: 3件・再実行で重複なし"))
+    out.append(check(tq.format(c=3), "= 1", "SQL-03: C=1"))
     out.append(check(tq.format(c=1), "= 3", "SQL-03: A=3"))
     out.append(check(tq.format(c=2), "= 3", "SQL-03: B=3"))
 
@@ -108,11 +115,20 @@ def scenario():
     out.append(extract)
     out.append(check(tq.format(c=2), "= 2", "SQL-03再抽出: 通常返品後 B=2"))
 
-    out.append(ret("RT-3", 1, 3, target="(SELECT id FROM t_recall_target WHERE customer_id=1)"))
-    out.append("UPDATE t_recall_target SET recovered_qty = 3, status = 'RECOVERED' WHERE customer_id = 1;\n")
+    out.append("UPDATE t_shipment SET status='CANCELLED' WHERE shipment_no='SH-5';\n"
+               "UPDATE t_shipment_line SET status='CANCELLED' WHERE id=5;\n")
+    out.append(mv("CANCEL", 1, 1, "shipment_line", 5))
+    out.append(extract)
+    out.append(check(tq.format(c=3), "= 0", "SQL-03(2): 出荷取消で C=0"))
+    out.append(check("SELECT status FROM t_recall_target WHERE customer_id=3", "= 'CLOSED'", "SQL-03(2): C CLOSED"))
+
+    out.append(ret("RT-3", 1, 2, target="(SELECT id FROM t_recall_target WHERE customer_id=1)"))
+    out.append("UPDATE t_recall_target SET recovered_qty = 2, unrecoverable_qty = 1 WHERE customer_id = 1;\n")
     out.append(extract)
     out.append(check(tq.format(c=1), "= 3", "SQL-03再抽出: 回収品返品は出荷正味から除かない A=3"))
-    out.append(check("SELECT status FROM t_recall_target WHERE customer_id=1", "= 'RECOVERED'", "SQL-03再抽出: 回収済ステータス維持"))
+    out.append(check("SELECT status FROM t_recall_target WHERE customer_id=1", "= 'RECOVERED'", "SQL-03再抽出: 回収2＋回収不能1で RECOVERED"))
+    out.append(f"CREATE TEMP TABLE r1b AS {sub(SQL['SQL-01'], lot_id='1')};\n")
+    out.append(check("SELECT recalled_qty FROM r1b WHERE customer_code='C001'", "= 2", "SQL-01: 回収数量列"))
 
     out.append(ret("RT-4", 2, 2))
     out.append(extract)
