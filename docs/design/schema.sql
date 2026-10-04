@@ -75,6 +75,7 @@ CREATE TABLE m_customer (
   customer_type VARCHAR(20) NOT NULL,
   medical_inst_code VARCHAR(20),
   representative VARCHAR(50),
+  contact_name VARCHAR(50),
   postal_code VARCHAR(8),
   address VARCHAR(200) NOT NULL,
   phone VARCHAR(20),
@@ -94,6 +95,7 @@ COMMENT ON COLUMN m_customer.name IS '顧客名';
 COMMENT ON COLUMN m_customer.customer_type IS '顧客区分';
 COMMENT ON COLUMN m_customer.medical_inst_code IS '医療機関コード';
 COMMENT ON COLUMN m_customer.representative IS '代表者名';
+COMMENT ON COLUMN m_customer.contact_name IS '担当者名';
 COMMENT ON COLUMN m_customer.postal_code IS '郵便番号';
 COMMENT ON COLUMN m_customer.address IS '住所';
 COMMENT ON COLUMN m_customer.phone IS '電話番号';
@@ -114,6 +116,7 @@ CREATE TABLE m_location (
   storage_class VARCHAR(10) NOT NULL,
   temp_min NUMERIC(5,1) NOT NULL,
   temp_max NUMERIC(5,1) NOT NULL,
+  is_quarantine BOOLEAN NOT NULL DEFAULT false,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by BIGINT NOT NULL REFERENCES m_user(id),
@@ -128,6 +131,7 @@ COMMENT ON COLUMN m_location.name IS '保管場所名';
 COMMENT ON COLUMN m_location.storage_class IS '保管温度区分';
 COMMENT ON COLUMN m_location.temp_min IS '許容温度下限（℃）';
 COMMENT ON COLUMN m_location.temp_max IS '許容温度上限（℃）';
+COMMENT ON COLUMN m_location.is_quarantine IS '隔離保管フラグ';
 COMMENT ON COLUMN m_location.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_location.created_at IS '作成日時';
 COMMENT ON COLUMN m_location.created_by IS '作成者';
@@ -302,6 +306,8 @@ CREATE TABLE m_ship_to (
   postal_code VARCHAR(8),
   address VARCHAR(200) NOT NULL,
   phone VARCHAR(20),
+  contact_name VARCHAR(50),
+  email VARCHAR(254),
   is_default BOOLEAN NOT NULL DEFAULT false,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -317,6 +323,8 @@ COMMENT ON COLUMN m_ship_to.name IS '納品先名';
 COMMENT ON COLUMN m_ship_to.postal_code IS '郵便番号';
 COMMENT ON COLUMN m_ship_to.address IS '住所';
 COMMENT ON COLUMN m_ship_to.phone IS '電話番号';
+COMMENT ON COLUMN m_ship_to.contact_name IS '担当者名';
+COMMENT ON COLUMN m_ship_to.email IS 'メール';
 COMMENT ON COLUMN m_ship_to.is_default IS '既定フラグ';
 COMMENT ON COLUMN m_ship_to.is_active IS '有効フラグ';
 COMMENT ON COLUMN m_ship_to.created_at IS '作成日時';
@@ -415,7 +423,6 @@ CREATE TABLE t_receipt (
   supplier_id BIGINT NOT NULL REFERENCES m_supplier(id),
   purchase_order_id BIGINT REFERENCES t_purchase_order(id),
   receipt_date DATE NOT NULL,
-  arrival_temp NUMERIC(5,1),
   status VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -430,7 +437,6 @@ COMMENT ON COLUMN t_receipt.receipt_no IS '入荷番号';
 COMMENT ON COLUMN t_receipt.supplier_id IS '仕入先ID';
 COMMENT ON COLUMN t_receipt.purchase_order_id IS '発注ID';
 COMMENT ON COLUMN t_receipt.receipt_date IS '入荷日';
-COMMENT ON COLUMN t_receipt.arrival_temp IS '到着時温度（℃）';
 COMMENT ON COLUMN t_receipt.status IS 'ステータス';
 COMMENT ON COLUMN t_receipt.note IS '備考';
 COMMENT ON COLUMN t_receipt.created_at IS '作成日時';
@@ -448,6 +454,8 @@ CREATE TABLE t_lot (
   supplier_lot_no VARCHAR(50) NOT NULL,
   manufactured_on DATE,
   expires_on DATE NOT NULL,
+  received_on DATE NOT NULL,
+  unit_cost NUMERIC(12,2) NOT NULL,
   measured_particle_conc NUMERIC(20,0),
   status VARCHAR(20) NOT NULL DEFAULT 'QUARANTINE',
   status_reason TEXT,
@@ -467,9 +475,11 @@ COMMENT ON COLUMN t_lot.supplier_id IS '仕入先ID';
 COMMENT ON COLUMN t_lot.supplier_lot_no IS '仕入先ロット番号';
 COMMENT ON COLUMN t_lot.manufactured_on IS '製造日';
 COMMENT ON COLUMN t_lot.expires_on IS '使用期限';
+COMMENT ON COLUMN t_lot.received_on IS '初回入荷日';
+COMMENT ON COLUMN t_lot.unit_cost IS '原価単価（円）';
 COMMENT ON COLUMN t_lot.measured_particle_conc IS '実測粒子濃度（個/mL）';
 COMMENT ON COLUMN t_lot.status IS 'ロットステータス';
-COMMENT ON COLUMN t_lot.status_reason IS 'ステータス変更理由';
+COMMENT ON COLUMN t_lot.status_reason IS '最新ステータス変更理由';
 COMMENT ON COLUMN t_lot.inspected_by IS '検品者';
 COMMENT ON COLUMN t_lot.inspected_at IS '検品日時';
 COMMENT ON COLUMN t_lot.created_at IS '作成日時';
@@ -487,6 +497,8 @@ CREATE TABLE t_sales_order (
   order_date DATE NOT NULL,
   requested_date DATE,
   sales_user_id BIGINT NOT NULL REFERENCES m_user(id),
+  credit_approved_by BIGINT REFERENCES m_user(id),
+  credit_approved_at TIMESTAMPTZ,
   status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -503,6 +515,8 @@ COMMENT ON COLUMN t_sales_order.ship_to_id IS '納品先ID';
 COMMENT ON COLUMN t_sales_order.order_date IS '受注日';
 COMMENT ON COLUMN t_sales_order.requested_date IS '希望納期';
 COMMENT ON COLUMN t_sales_order.sales_user_id IS '営業担当';
+COMMENT ON COLUMN t_sales_order.credit_approved_by IS '与信超過承認者';
+COMMENT ON COLUMN t_sales_order.credit_approved_at IS '与信超過承認日時';
 COMMENT ON COLUMN t_sales_order.status IS 'ステータス';
 COMMENT ON COLUMN t_sales_order.note IS '備考';
 COMMENT ON COLUMN t_sales_order.created_at IS '作成日時';
@@ -511,13 +525,17 @@ COMMENT ON COLUMN t_sales_order.updated_at IS '更新日時';
 COMMENT ON COLUMN t_sales_order.updated_by IS '更新者';
 COMMENT ON COLUMN t_sales_order.version IS '版数';
 
--- 入荷明細：入荷明細（1明細＝1ロット）
+-- 入荷明細：入荷明細（入荷明細:ロット＝多:1。分納は同一ロットに加算）
 CREATE TABLE t_receipt_line (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   receipt_id BIGINT NOT NULL REFERENCES t_receipt(id),
   purchase_order_line_id BIGINT REFERENCES t_purchase_order_line(id),
   product_id BIGINT NOT NULL REFERENCES m_product(id),
-  lot_id BIGINT NOT NULL REFERENCES t_lot(id),
+  supplier_lot_no VARCHAR(50) NOT NULL,
+  manufactured_on DATE,
+  expires_on DATE NOT NULL,
+  arrival_temp NUMERIC(5,1),
+  lot_id BIGINT REFERENCES t_lot(id),
   location_id BIGINT NOT NULL REFERENCES m_location(id),
   quantity INTEGER NOT NULL,
   unit_price NUMERIC(12,2) NOT NULL,
@@ -532,6 +550,10 @@ COMMENT ON COLUMN t_receipt_line.id IS '入荷明細ID';
 COMMENT ON COLUMN t_receipt_line.receipt_id IS '入荷ID';
 COMMENT ON COLUMN t_receipt_line.purchase_order_line_id IS '発注明細ID';
 COMMENT ON COLUMN t_receipt_line.product_id IS '商品ID';
+COMMENT ON COLUMN t_receipt_line.supplier_lot_no IS '仕入先ロット番号';
+COMMENT ON COLUMN t_receipt_line.manufactured_on IS '製造日';
+COMMENT ON COLUMN t_receipt_line.expires_on IS '使用期限';
+COMMENT ON COLUMN t_receipt_line.arrival_temp IS '到着時温度（℃）';
 COMMENT ON COLUMN t_receipt_line.lot_id IS 'ロットID';
 COMMENT ON COLUMN t_receipt_line.location_id IS '入庫保管場所ID';
 COMMENT ON COLUMN t_receipt_line.quantity IS '入荷数量';
@@ -541,6 +563,31 @@ COMMENT ON COLUMN t_receipt_line.created_by IS '作成者';
 COMMENT ON COLUMN t_receipt_line.updated_at IS '更新日時';
 COMMENT ON COLUMN t_receipt_line.updated_by IS '更新者';
 COMMENT ON COLUMN t_receipt_line.version IS '版数';
+
+-- ロットステータス履歴：ロット判定・状態変更の経緯（追記のみ）
+CREATE TABLE t_lot_status_history (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  lot_id BIGINT NOT NULL REFERENCES t_lot(id),
+  from_status VARCHAR(20),
+  to_status VARCHAR(20) NOT NULL,
+  reason TEXT,
+  temperature_log_id BIGINT REFERENCES t_temperature_log(id),
+  recall_id BIGINT REFERENCES t_recall(id),
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by BIGINT NOT NULL REFERENCES m_user(id)
+);
+COMMENT ON TABLE t_lot_status_history IS 'ロットステータス履歴';
+COMMENT ON COLUMN t_lot_status_history.id IS 'ID';
+COMMENT ON COLUMN t_lot_status_history.lot_id IS 'ロットID';
+COMMENT ON COLUMN t_lot_status_history.from_status IS '変更前ステータス';
+COMMENT ON COLUMN t_lot_status_history.to_status IS '変更後ステータス';
+COMMENT ON COLUMN t_lot_status_history.reason IS '理由';
+COMMENT ON COLUMN t_lot_status_history.temperature_log_id IS '関連温度記録ID';
+COMMENT ON COLUMN t_lot_status_history.recall_id IS '関連回収案件ID';
+COMMENT ON COLUMN t_lot_status_history.changed_at IS '変更日時';
+COMMENT ON COLUMN t_lot_status_history.created_at IS '作成日時';
+COMMENT ON COLUMN t_lot_status_history.created_by IS '作成者';
 
 -- 在庫：ロット×保管場所の現在庫（移動履歴の集計結果）
 CREATE TABLE t_inventory (
@@ -682,6 +729,7 @@ CREATE TABLE t_recall_target (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   recall_id BIGINT NOT NULL REFERENCES t_recall(id),
   customer_id BIGINT NOT NULL REFERENCES m_customer(id),
+  ship_to_id BIGINT NOT NULL REFERENCES m_ship_to(id),
   lot_id BIGINT NOT NULL REFERENCES t_lot(id),
   shipped_qty INTEGER NOT NULL,
   contacted_on DATE,
@@ -698,8 +746,9 @@ COMMENT ON TABLE t_recall_target IS '回収対象顧客';
 COMMENT ON COLUMN t_recall_target.id IS 'ID';
 COMMENT ON COLUMN t_recall_target.recall_id IS '回収案件ID';
 COMMENT ON COLUMN t_recall_target.customer_id IS '顧客ID';
+COMMENT ON COLUMN t_recall_target.ship_to_id IS '納品先ID';
 COMMENT ON COLUMN t_recall_target.lot_id IS 'ロットID';
-COMMENT ON COLUMN t_recall_target.shipped_qty IS '出荷数量';
+COMMENT ON COLUMN t_recall_target.shipped_qty IS '出荷正味数量';
 COMMENT ON COLUMN t_recall_target.contacted_on IS '連絡日';
 COMMENT ON COLUMN t_recall_target.contact_method IS '連絡方法';
 COMMENT ON COLUMN t_recall_target.recovered_qty IS '回収数量';
@@ -720,7 +769,8 @@ CREATE TABLE t_shipment_line (
   location_id BIGINT NOT NULL REFERENCES m_location(id),
   quantity INTEGER NOT NULL,
   unit_price NUMERIC(12,2) NOT NULL,
-  unit_cost NUMERIC(12,2) NOT NULL,
+  unit_cost NUMERIC(12,2),
+  status VARCHAR(20) NOT NULL DEFAULT 'ALLOCATED',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by BIGINT NOT NULL REFERENCES m_user(id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -737,6 +787,7 @@ COMMENT ON COLUMN t_shipment_line.location_id IS '出庫保管場所ID';
 COMMENT ON COLUMN t_shipment_line.quantity IS '出荷数量';
 COMMENT ON COLUMN t_shipment_line.unit_price IS '販売単価（円）';
 COMMENT ON COLUMN t_shipment_line.unit_cost IS '原価単価（円）';
+COMMENT ON COLUMN t_shipment_line.status IS '明細ステータス';
 COMMENT ON COLUMN t_shipment_line.created_at IS '作成日時';
 COMMENT ON COLUMN t_shipment_line.created_by IS '作成者';
 COMMENT ON COLUMN t_shipment_line.updated_at IS '更新日時';
@@ -748,11 +799,13 @@ CREATE TABLE t_return (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   return_no VARCHAR(20) NOT NULL,
   shipment_line_id BIGINT NOT NULL REFERENCES t_shipment_line(id),
+  recall_target_id BIGINT REFERENCES t_recall_target(id),
   returned_on DATE NOT NULL,
   quantity INTEGER NOT NULL,
   reason TEXT NOT NULL,
   disposition VARCHAR(20),
-  location_id BIGINT REFERENCES m_location(id),
+  location_id BIGINT NOT NULL REFERENCES m_location(id),
+  restock_location_id BIGINT REFERENCES m_location(id),
   status VARCHAR(20) NOT NULL DEFAULT 'RECEIVED',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by BIGINT NOT NULL REFERENCES m_user(id),
@@ -764,11 +817,13 @@ COMMENT ON TABLE t_return IS '返品';
 COMMENT ON COLUMN t_return.id IS '返品ID';
 COMMENT ON COLUMN t_return.return_no IS '返品番号';
 COMMENT ON COLUMN t_return.shipment_line_id IS '元出荷明細ID';
+COMMENT ON COLUMN t_return.recall_target_id IS '回収対象ID';
 COMMENT ON COLUMN t_return.returned_on IS '返品日';
 COMMENT ON COLUMN t_return.quantity IS '返品数量';
 COMMENT ON COLUMN t_return.reason IS '返品理由';
 COMMENT ON COLUMN t_return.disposition IS '処置';
-COMMENT ON COLUMN t_return.location_id IS '戻し保管場所ID';
+COMMENT ON COLUMN t_return.location_id IS '受入保管場所ID';
+COMMENT ON COLUMN t_return.restock_location_id IS '戻し保管場所ID';
 COMMENT ON COLUMN t_return.status IS 'ステータス';
 COMMENT ON COLUMN t_return.created_at IS '作成日時';
 COMMENT ON COLUMN t_return.created_by IS '作成者';
@@ -791,7 +846,9 @@ ALTER TABLE t_purchase_order_line ADD CONSTRAINT uq_po_line UNIQUE (purchase_ord
 ALTER TABLE t_receipt ADD CONSTRAINT uq_receipt_no UNIQUE (receipt_no);
 ALTER TABLE t_lot ADD CONSTRAINT uq_lot_no UNIQUE (lot_no);
 ALTER TABLE t_lot ADD CONSTRAINT uq_lot_supplier_lot UNIQUE (supplier_id, product_id, supplier_lot_no);
-CREATE INDEX ix_lot_product_status_exp ON t_lot (product_id, status, expires_on);
+CREATE INDEX ix_lot_product_status_exp ON t_lot (product_id, status, expires_on, received_on);
+CREATE INDEX ix_lot_status_history ON t_lot_status_history (lot_id, changed_at);
+ALTER TABLE t_receipt_line ADD CONSTRAINT ck_receipt_line_qty CHECK (quantity > 0);
 ALTER TABLE t_inventory ADD CONSTRAINT uq_inventory_lot_loc UNIQUE (lot_id, location_id);
 ALTER TABLE t_inventory ADD CONSTRAINT ck_inventory_qty CHECK (on_hand_qty >= 0 AND 0 <= allocated_qty AND allocated_qty <= on_hand_qty);
 CREATE INDEX ix_movement_lot_loc ON t_stock_movement (lot_id, location_id, moved_at);
@@ -801,13 +858,15 @@ CREATE INDEX ix_so_customer_date ON t_sales_order (customer_id, order_date);
 ALTER TABLE t_sales_order_line ADD CONSTRAINT uq_so_line UNIQUE (sales_order_id, line_no);
 ALTER TABLE t_shipment ADD CONSTRAINT uq_shipment_no UNIQUE (shipment_no);
 CREATE INDEX ix_shipment_customer_date ON t_shipment (customer_id, shipped_on);
-CREATE INDEX ix_shipment_line_lot ON t_shipment_line (lot_id);
+CREATE INDEX ix_shipment_line_lot ON t_shipment_line (lot_id, status);
+CREATE INDEX ix_shipment_line_so_line ON t_shipment_line (sales_order_line_id, status);
 ALTER TABLE t_shipment_line ADD CONSTRAINT ck_shipment_line_qty CHECK (quantity > 0);
 ALTER TABLE t_return ADD CONSTRAINT uq_return_no UNIQUE (return_no);
 CREATE INDEX ix_return_shipment_line ON t_return (shipment_line_id);
+CREATE INDEX ix_return_recall_target ON t_return (recall_target_id);
 ALTER TABLE t_recall ADD CONSTRAINT uq_recall_no UNIQUE (recall_no);
 ALTER TABLE t_recall_lot ADD CONSTRAINT uq_recall_lot UNIQUE (recall_id, lot_id);
-ALTER TABLE t_recall_target ADD CONSTRAINT uq_recall_target UNIQUE (recall_id, customer_id, lot_id);
+ALTER TABLE t_recall_target ADD CONSTRAINT uq_recall_target UNIQUE (recall_id, ship_to_id, lot_id);
 CREATE INDEX ix_temp_location_time ON t_temperature_log (location_id, measured_at);
 CREATE INDEX ix_attachment_owner ON t_attachment (owner_type, owner_id);
 CREATE INDEX ix_audit_target ON t_audit_log (target_table, target_id, occurred_at);

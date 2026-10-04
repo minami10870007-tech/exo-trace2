@@ -180,10 +180,11 @@ def run():
     # 9. SQL内のテーブル.カラム（エイリアス解決）
     for sid, _, sql in spec.SQLS:
         aliases = dict((a, t) for t, a in re.findall(r"\b([mt]_[a-z_]+)\s+([a-z]{1,3})\b", sql))
+        derived = set(re.findall(r"\b([a-z]{1,3}) AS \(", sql)) | set(re.findall(r"\)\s+([a-z]{1,3})\b", sql))
         for a, c in re.findall(r"\b([a-z]{1,3})\.([a-z_]+)\b", sql):
             t = aliases.get(a)
             if t is None:
-                if a in ("rt",):
+                if a in derived:
                     continue
                 add(f"[SQL] {sid} エイリアス {a} が未定義")
             elif c not in cols[t]:
@@ -212,6 +213,16 @@ def run():
                 code = part.split("（")[0]
                 if code not in lot_codes and code != "":
                     add(f"[状態遷移] ロット状態 {code} がコード定義にない")
+    # 11b. MUST機能の業務画面には画面項目定義がある
+    item_screens = {i[0] for i in spec.SCREEN_ITEMS}
+    cat = {sc[0]: sc[2] for sc in spec.SCREENS}
+    for f in spec.FUNCTIONS:
+        if f[4] != "MUST":
+            continue
+        for sid in ID_PATTERNS["screen"].findall(f[5]):
+            if cat.get(sid) in ("仕入", "ロット", "在庫", "販売", "トレース", "品質") and sid not in item_screens:
+                add(f"[画面項目] MUST機能 {f[0]} の画面 {sid} に画面項目定義がない")
+
     # 12. メッセージID接頭辞と種別の整合
     for mid, kind, _, _ in spec.MESSAGES:
         if (mid.startswith("MSG-E") and kind != "エラー") or (mid.startswith("MSG-W") and kind != "警告"):
