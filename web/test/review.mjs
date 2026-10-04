@@ -121,6 +121,15 @@ function audit(opts) {
     }
   });
 
+  // 3a) 表の中の横スクロール（列が切れて見落とされる）
+  scope.querySelectorAll('.table-wrap').forEach((w) => {
+    if (visible(w) && w.scrollWidth > w.clientWidth + 1) issues.push({ type: 'table-scroll', detail: `${desc(w.querySelector('th, td') || w)} を含む表が横スクロール（${w.scrollWidth}px > ${w.clientWidth}px）` });
+  });
+  // 3c) 枠からはみ出す中身（チェックリスト等）
+  scope.querySelectorAll('.check, .card, .stat, .kpi, .target, .lot-card').forEach((el) => {
+    if (!visible(el) || getComputedStyle(el).overflowY !== 'visible') return;
+    if (el.scrollHeight > el.clientHeight + 2) issues.push({ type: 'content-overflow', detail: `${desc(el)} の中身が枠から ${el.scrollHeight - el.clientHeight}px はみ出す` });
+  });
   // 3b) 隣接要素の重なり（負のマージン等による食い込み）
   scope.querySelectorAll('#main *, dialog[open] *').forEach((el) => {
     const next = el.nextElementSibling;
@@ -191,7 +200,8 @@ const SCENES = [
   ['inventory', async (p) => { await p.goto(server.url + '/#/inventory'); }],
   ['traceLot', async (p) => { await p.goto(server.url + '/#/traceLot'); await p.fill('#tlQuery', 'BS-2409'); await p.click('#tlSearch button'); }],
   ['traceCustomer', async (p) => { await p.goto(server.url + '/#/traceCustomer'); await p.selectOption('#tcCustomer', { index: 1 }); await p.click('#tcSearch button'); }],
-  ['recall', async (p) => { await p.goto(server.url + '/#/recall'); await p.click('#rcNew summary'); }],
+  ['recall', async (p) => { await p.goto(server.url + '/#/recall'); }],
+  ['recall-new', async (p) => { await p.goto(server.url + '/#/recall'); await idle(p); await p.click('#rcNew summary'); }],
   ['master', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="m_product"]'); }],
   ['master-rules', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="rules"]'); }],
   ['master-dialog', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="m_product"]'); await idle(p); await p.click('#msList tr[data-action]'); }],

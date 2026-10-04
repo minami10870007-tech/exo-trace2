@@ -82,7 +82,7 @@
         <h3 class="section-title">商品とロット</h3>
         <div class="form-grid">
           <div class="field"><label for="rcSupplier">仕入先</label><select id="rcSupplier" required></select></div>
-          <div class="field span-2"><label for="rcProduct">商品</label><select id="rcProduct" required></select></div>
+          <div class="field span-2"><label for="rcProduct">商品</label><select id="rcProduct" required aria-describedby="rcProductInfo"></select><div class="field-hint" id="rcProductInfo"></div></div>
           <div class="field"><label for="rcSupLot">仕入先ロット番号</label><input id="rcSupLot" autocomplete="off" autocapitalize="characters" required></div>
           <div class="field"><label for="rcMfg">製造日 <span class="opt">任意</span></label><input id="rcMfg" type="date"></div>
           <div class="field"><label for="rcExp">使用期限</label><input id="rcExp" type="date" required></div>
