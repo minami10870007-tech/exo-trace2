@@ -73,6 +73,7 @@ def setup(ws, headers, widths, rows, center_cols=(), title=None, note=None):
     ws.freeze_panes = ws.cell(row=start + 1, column=1)
     ws.auto_filter.ref = f"A{start}:{get_column_letter(len(headers))}{last}"
     ws.sheet_view.zoomScale = 90
+    ws.print_title_rows = f"{start}:{start}"
     return start
 
 
@@ -92,7 +93,7 @@ def build(out):
     ws["A1"].font = F_TITLE
     ws["A2"] = spec.DOC_TITLE
     ws["A2"].font = Font(name=FONT, size=14, bold=True)
-    info = [("版数", spec.DOC_VERSION), ("作成日", spec.REVISIONS[0][1]),
+    info = [("版数", spec.REVISIONS[-1][0]), ("作成日", spec.REVISIONS[0][1]),
             ("最終更新日", spec.REVISIONS[-1][1]), ("作成", "Claude（自動生成・自己レビュー済）"),
             ("生成元", "docs/design/tools/spec.py → build.py（設計変更は spec.py を編集し再生成）")]
     for i, (k, v) in enumerate(info, 4):
@@ -196,7 +197,7 @@ def build(out):
     # ---------------- 画面項目定義 ----------------
     w = new("sitem")
     screen_name = {s[0]: s[1] for s in spec.SCREENS}
-    rows = [(i[0], screen_name[i[0]]) + i[1:] for i in spec.SCREEN_ITEMS]
+    rows = [(i[0], screen_name[i[0]]) + i[1:] for i in sorted(spec.SCREEN_ITEMS, key=lambda x: (x[0], x[1]))]
     setup(w, ["画面ID", "画面名", "No", "項目名", "種別", "入出力", "必須", "桁/形式", "対応テーブル.カラム",
               "初期値", "チェック・備考"], [9, 16, 5, 20, 12, 8, 9, 16, 34, 16, 50], rows,
           center_cols=(1, 3, 6, 7), title="画面項目定義",
