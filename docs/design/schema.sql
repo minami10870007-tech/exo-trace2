@@ -536,6 +536,7 @@ CREATE TABLE t_receipt_line (
   expires_on DATE NOT NULL,
   arrival_temp NUMERIC(5,1),
   lot_id BIGINT REFERENCES t_lot(id),
+  split_status VARCHAR(20),
   location_id BIGINT NOT NULL REFERENCES m_location(id),
   quantity INTEGER NOT NULL,
   unit_price NUMERIC(12,2) NOT NULL,
@@ -555,6 +556,7 @@ COMMENT ON COLUMN t_receipt_line.manufactured_on IS '製造日';
 COMMENT ON COLUMN t_receipt_line.expires_on IS '使用期限';
 COMMENT ON COLUMN t_receipt_line.arrival_temp IS '到着時温度（℃）';
 COMMENT ON COLUMN t_receipt_line.lot_id IS 'ロットID';
+COMMENT ON COLUMN t_receipt_line.split_status IS '分納判定';
 COMMENT ON COLUMN t_receipt_line.location_id IS '入庫保管場所ID';
 COMMENT ON COLUMN t_receipt_line.quantity IS '入荷数量';
 COMMENT ON COLUMN t_receipt_line.unit_price IS '仕入単価（円）';
