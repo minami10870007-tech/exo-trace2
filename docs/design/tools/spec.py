@@ -20,7 +20,9 @@ REVISIONS = [
     ("0.4", "2026-10-04", "修正", "第3回 再レビュー指摘15件を修正（ロック順序の統一 P-00、未検品保留の解除先、分納時のロット状態別処理と隔離入庫・分納受入判定、"
      "回収対象の再抽出の消滅分更新、与信承認フロー、仕入先返品、回収登録/抽出の分離、ロットステータス変更処理、全MUST画面の項目定義）", "Claude"),
     ("1.0", "2026-10-04", "確定", "第4回 収束確認の指摘6件を修正（隔離在庫の出所別管理、受注ロックと与信再判定、発注打切り状態、回収のロック順序、"
-     "回収進捗更新の権限と自動判定、仕入先返品の参照伝票）。全自動チェック・実DB検証を通過し初版確定", "Claude"),
+     "回収進捗更新の権限と自動判定、仕入先返品の参照伝票）", "Claude"),
+    ("1.1", "2026-10-04", "修正", "第5回 収束確認の指摘5件を修正（分納の PENDING 設定と入荷 ref、与信承認待ち受注の取消・打切り・出荷取消、"
+     "出荷取消時の受注ロック、打切り発注の復活防止、隔離在庫の実数差異処理）", "Claude"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -511,18 +513,20 @@ STATES = [
     ("発注", "APPROVED（承認済）", "一部入荷", "PARTIAL（一部入荷）", "入荷済数量 < 発注数量", "WAREHOUSE"),
     ("発注", "APPROVED（承認済）/PARTIAL（一部入荷）", "全量入荷", "RECEIVED（入荷完了）", "全明細で入荷済数量 >= 発注数量", "WAREHOUSE"),
     ("発注", "PARTIAL（一部入荷）/RECEIVED（入荷完了）", "入荷取消", "APPROVED（承認済）/PARTIAL（一部入荷）", "P-12 で入荷済数量を減算し再判定", "ADMIN"),
-    ("発注", "PARTIAL（一部入荷）", "残数打切り", "CLOSED（打切り）", "API-024。以後の入荷対象外。理由を備考に記録", "PURCHASE"),
+    ("発注", "PARTIAL（一部入荷）", "残数打切り", "CLOSED（打切り）", "API-024。DRAFT の入荷がないこと（MSG-E32）。以後の入荷対象外。理由を備考に記録", "PURCHASE"),
     ("発注", "CLOSED（打切り）", "入荷取消", "CLOSED（打切り）", "P-12。入荷済数量のみ減算し状態は維持", "ADMIN"),
     ("発注", "DRAFT（作成中）/APPROVED（承認済）", "取消", "CANCELLED（取消）", "入荷実績がない場合のみ（MSG-E21）", "PURCHASE"),
     ("受注", "（なし）", "登録（与信超過）", "CREDIT_PENDING（与信承認待ち）", "P-03。引当不可", "SALES"),
     ("受注", "OPEN（受付）/PARTIAL（一部出荷）", "変更で与信超過", "CREDIT_PENDING（与信承認待ち）", "P-03。ALLOCATED の出荷がない場合のみ（あれば MSG-E31）", "SALES"),
     ("受注", "CREDIT_PENDING（与信承認待ち）", "与信承認", "OPEN（受付）/PARTIAL（一部出荷）", "API-063。credit_approved_by/at を記録。出荷済数量で再判定", "ADMIN"),
-    ("受注", "CREDIT_PENDING（与信承認待ち）", "取消", "CANCELLED（取消）", "", "SALES"),
+    ("受注", "CREDIT_PENDING（与信承認待ち）", "取消", "CANCELLED（取消）", "全明細の出荷済数量=0 の場合のみ（MSG-E19）", "SALES"),
+    ("受注", "CREDIT_PENDING（与信承認待ち）", "残数打切り", "CLOSED（打切り）", "API-062。出荷済数量>0 で承認しない場合の終了手段", "SALES"),
+    ("受注", "CREDIT_PENDING（与信承認待ち）", "出荷取消", "CREDIT_PENDING（与信承認待ち）", "P-06。出荷済数量のみ減算し状態は維持（承認を迂回させない）", "ADMIN"),
     ("受注", "OPEN（受付）", "一部出荷", "PARTIAL（一部出荷）", "", "WAREHOUSE"),
     ("受注", "OPEN（受付）/PARTIAL（一部出荷）", "全量出荷", "SHIPPED（出荷完了）", "", "WAREHOUSE"),
     ("受注", "PARTIAL（一部出荷）/SHIPPED（出荷完了）", "出荷取消", "OPEN（受付）/PARTIAL（一部出荷）", "P-06 で出荷済数量を減算し再判定", "ADMIN"),
     ("受注", "CLOSED（打切り）", "出荷取消", "CLOSED（打切り）", "P-06。出荷済数量のみ減算し状態は維持（再出荷しない）", "ADMIN"),
-    ("受注", "PARTIAL（一部出荷）", "残数打切り", "CLOSED（打切り）", "API-062。ALLOCATED の出荷がないこと（MSG-E19）", "SALES"),
+    ("受注", "PARTIAL（一部出荷）", "残数打切り", "CLOSED（打切り）", "API-062。ALLOCATED の出荷がないこと（MSG-E19）。CREDIT_PENDING からも可（出荷済>0 の場合）", "SALES"),
     ("受注", "OPEN（受付）", "取消", "CANCELLED（取消）", "出荷実績・ALLOCATED の出荷がない場合のみ（MSG-E19）", "SALES"),
     ("出荷", "ALLOCATED（引当済）", "出荷確定", "SHIPPED（出荷済）", "P-05。ALLOCATED の明細のみ SHIPPED にする", "WAREHOUSE"),
     ("出荷", "ALLOCATED（引当済）", "引当解除（全明細）", "CANCELLED（取消）", "P-06 / P-11 で ALLOCATED 明細が残らなくなった場合", "WAREHOUSE"),
@@ -559,7 +563,7 @@ RULES = [
     ("BR-17", "品質", "保留解除は、COA添付済かつ受入検品済（inspected_at あり）のロットは RELEASED へ、未検品のロットは QUARANTINE へ戻す（検品を経ずに合格にしない）。", "LOT-02"),
     ("BR-18", "回収", "回収品（回収対象に紐づく返品）は在庫に戻さず、廃棄（DISPOSE）のみとする。", "RET-01,RCL-02"),
     ("BR-19", "品質", "合格（RELEASED）・保留（HOLD）ロットへの分納分は隔離保管場所に入庫し、QAの分納受入判定（P-16）を経るまで引当対象にしない。", "RCV-01,RCV-02"),
-    ("BR-20", "在庫", "隔離保管場所の在庫は、返品判定（P-07）・分納受入判定（P-16）・仕入先返品（P-17）以外で払い出さない。払出しは出所伝票（入荷明細／返品）単位で、その残数を上限とする。", "INV-02,INV-03"),
+    ("BR-20", "在庫", "隔離保管場所の在庫は、返品判定（P-07）・分納受入判定（P-16）・仕入先返品（P-17）以外で払い出さない。払出しは出所伝票（入荷明細／返品）単位で、その残数を上限とする。例外として、実数差異は QA が出所伝票を指定した調整・廃棄（P-10）で処理する。", "INV-02,INV-03"),
     ("BR-16", "アラート", "使用期限まで90日/30日、在庫が発注点以下、温度逸脱、回収未対応7日超でダッシュボード表示＋メール通知。", "INV-05"),
 ]
 
@@ -575,7 +579,7 @@ PERMISSIONS = {
     "PUR-01": "CCR-R-", "PUR-02": "AR--R-",
     "RCV-01": "CRC-RR", "RCV-02": "RRR-A-",
     "LOT-01": "RRRRRR", "LOT-02": "RRR-A-",
-    "INV-01": "RRRRRR", "INV-02": "C-C-R-", "INV-03": "C-C-R-", "INV-04": "C-C-CR", "INV-05": "RRRRRR",
+    "INV-01": "RRRRRR", "INV-02": "C-C-R-", "INV-03": "C-C-C-", "INV-04": "C-C-CR", "INV-05": "RRRRRR",
     "SAL-01": "C--CRR",
     "SHP-01": "C-CRR-", "SHP-02": "C-CRR-", "SHP-03": "R-RR--",
     "RET-01": "C-CRA-",
@@ -771,6 +775,14 @@ REVIEWS = [
     (4, "同時実行（回収）", "P-00 に回収テーブルが含まれず、完了判定と回収品登録・再抽出が競合する", "P-00 に回収案件→回収対象のロックを追加し P-07/P-14/P-18/P-19 に明記", "対応済", "1.0"),
     (4, "権限・処理（回収）", "API-102 で SALES がクローズでき、回収不能入力で RECOVERED にならない", "P-19 を新設（SALES は連絡情報のみ、QA はクローズ・回収不能数量）し、更新後に RECOVERED 判定", "対応済", "1.0"),
     (4, "処理（仕入先返品）", "移行ロット・分納ロットで参照する入荷明細が決まらない", "返品元入荷明細を利用者が選択（残数上限）、移行ロットは ref_type=migration・単価は t_lot.unit_cost", "対応済", "1.0"),
+    (5, "処理（分納）", "P-01 が split_status=PENDING を設定せず、RECEIPT の ref もないため分納分が隔離保管場所から処理できない",
+     "P-01 で分納時 PENDING、通常入荷 NULL。RECEIPT 移動に ref_type=receipt_line／ref_id を明記", "対応済", "1.1"),
+    (5, "状態遷移（受注）", "出荷実績のある CREDIT_PENDING 受注が取消でき、打切り手段もなく、出荷取消で承認を迂回し得る",
+     "CREDIT_PENDING の取消は出荷済0のみ。CREDIT_PENDING→CLOSED（打切り）と出荷取消時の状態維持を追加", "対応済", "1.1"),
+    (5, "同時実行（受注）", "P-06 が受注をロックせず、打切り・与信再判定の結果を上書きし得る", "P-06 のロックに受注を追加し、ロック後の状態で再判定（CLOSED・CREDIT_PENDING は維持）", "対応済", "1.1"),
+    (5, "状態遷移（発注）", "打切り前の下書き入荷を確定すると CLOSED 発注が PARTIAL/RECEIVED に戻る", "P-01 で発注をロックし CLOSED/CANCELLED は確定不可。API-024 は DRAFT 入荷があれば不可（MSG-E32）", "対応済", "1.1"),
+    (5, "隔離在庫", "隔離中の破損・不足で現在庫が出所数量を下回ると P-16/P-07 が実行できず PENDING のまま残る",
+     "払出し数量を払出し可能数以下の入力値に変更。実数差異は QA が出所伝票指定の調整・廃棄で処理（BR-20・P-10 の例外）。権限マトリクス INV-03 の QA を C に変更（隔離保管場所の差異処理に限定）", "対応済", "1.1"),
 ]
 
 # ===========================================================================
@@ -979,7 +991,7 @@ APIS = [
     ("API-020", "GET/POST/PUT", "/api/purchase-orders[/{id}]", "発注検索・登録・更新", "PUR-01", "ADMIN,PURCHASE", ""),
     ("API-021", "POST", "/api/purchase-orders/{id}/approve", "発注承認", "PUR-02", "ADMIN", ""),
     ("API-022", "POST", "/api/purchase-orders/{id}/cancel", "発注取消", "PUR-01", "ADMIN,PURCHASE", ""),
-    ("API-024", "POST", "/api/purchase-orders/{id}/close", "発注残数打切り", "PUR-01", "ADMIN,PURCHASE", ""),
+    ("API-024", "POST", "/api/purchase-orders/{id}/close", "発注残数打切り（発注をロックし、未確定(DRAFT)の入荷があれば不可：MSG-E32）", "PUR-01", "ADMIN,PURCHASE", ""),
     ("API-023", "GET", "/api/purchase-orders/{id}/pdf", "発注書PDF", "PUR-02", "ADMIN,PURCHASE", ""),
     ("API-030", "POST", "/api/receipts", "入荷登録（下書き）", "RCV-01", "ADMIN,WAREHOUSE", ""),
     ("API-031", "POST", "/api/receipts/{id}/confirm", "入荷確定（ロット生成・在庫加算）", "RCV-01", "ADMIN,WAREHOUSE", "P-01"),
@@ -992,12 +1004,12 @@ APIS = [
     ("API-042", "POST", "/api/lots/{id}/status", "ロットステータス変更", "LOT-02", "QA", "P-15"),
     ("API-050", "GET", "/api/inventory", "在庫照会", "INV-01", "全ロール", ""),
     ("API-051", "POST", "/api/stock/transfers", "保管場所間移動", "INV-02", "ADMIN,WAREHOUSE", "P-10"),
-    ("API-052", "POST", "/api/stock/adjustments", "棚卸調整・廃棄", "INV-03", "ADMIN,WAREHOUSE", "P-10"),
+    ("API-052", "POST", "/api/stock/adjustments", "棚卸調整・廃棄", "INV-03", "ADMIN,WAREHOUSE（隔離保管場所の差異処理は QA のみ）", "P-10"),
     ("API-055", "POST", "/api/stock/supplier-returns", "仕入先返品", "INV-03", "ADMIN,WAREHOUSE", "P-17"),
     ("API-053", "POST", "/api/temperature-logs[/import]", "温度記録登録・CSV取込", "INV-04", "ADMIN,WAREHOUSE,QA", "P-09"),
     ("API-054", "GET", "/api/alerts", "アラート一覧", "INV-05", "全ロール", ""),
     ("API-060", "GET/POST/PUT", "/api/sales-orders[/{id}]", "受注検索・登録・更新", "SAL-01", "ADMIN,SALES", "P-03"),
-    ("API-062", "POST", "/api/sales-orders/{id}/close", "受注残数打切り", "SAL-01", "ADMIN,SALES", "P-03"),
+    ("API-062", "POST", "/api/sales-orders/{id}/close", "受注残数打切り（PARTIAL、または出荷済>0 の CREDIT_PENDING）", "SAL-01", "ADMIN,SALES", "P-03"),
     ("API-063", "POST", "/api/sales-orders/{id}/credit-approve", "与信超過の承認（CREDIT_PENDING→OPEN）", "SAL-01", "ADMIN", "P-03"),
     ("API-061", "POST", "/api/sales-orders/{id}/cancel", "受注取消", "SAL-01", "ADMIN,SALES", "P-03"),
     ("API-070", "POST", "/api/shipments/allocate", "自動引当（FEFO）", "SHP-01", "ADMIN,WAREHOUSE", "P-04"),
@@ -1031,15 +1043,16 @@ PROCESSES = [
     ("P-00", "共通：排他制御（ロック順序）", 6, "全処理はこの順序（ロット→在庫→伝票→回収）でロックを取得する。以下の各処理の『ロック』はこの手順を指す", ""),
     ("P-00", "共通：排他制御（ロック順序）", 7, "隔離保管場所からの払出しは必ず出所伝票（ref_type=receipt_line／return）を ref に記録し、"
      "払出し可能数＝出所数量−同一 ref での払出し済数量 を上限とする（BR-20）", "MSG-E30"),
-    ("P-01", "入荷確定", 1, "ロック（P-00）：既存ロット（仕入先,商品,仕入先ロット番号）→ 在庫 → t_receipt。status=DRAFT を確認", "MSG-E01"),
+    ("P-01", "入荷確定", 1, "ロック（P-00）：既存ロット（仕入先,商品,仕入先ロット番号）→ 在庫 → 発注（引当時）→ t_receipt。"
+     "入荷 status=DRAFT、発注 status=APPROVED/PARTIAL を確認（CLOSED/CANCELLED の発注は確定不可）", "MSG-E01"),
     ("P-01", "入荷確定", 2, "製造日 <= 入荷日 <= 当日、使用期限 > 入荷日 を検証", "MSG-E06,MSG-E22"),
     ("P-01", "入荷確定", 3, "既存ロットの状態で分岐（BR-15）：なし→社内ロット番号を採番し INSERT（QUARANTINE、received_on=入荷日）／"
-     "QUARANTINE→加算／VOID→QUARANTINE に戻す／RELEASED・HOLD→分納（隔離保管場所へ入庫）／REJECTED・RECALLED・EXPIRED→エラー。"
+     "QUARANTINE→加算／VOID→QUARANTINE に戻す／RELEASED・HOLD→分納（隔離保管場所へ入庫し t_receipt_line.split_status=PENDING。通常入荷は NULL）／REJECTED・RECALLED・EXPIRED→エラー。"
      "既存ありの場合は使用期限一致を検証", "MSG-E05,MSG-E25"),
     ("P-01", "入荷確定", 4, "入庫先を検証（BR-06）：温度区分一致。通常は is_quarantine=false、分納（RELEASED/HOLD）は is_quarantine=true", "MSG-E07"),
     ("P-01", "入荷確定", 5, "t_receipt_line.lot_id を設定。t_lot.unit_cost を移動平均で更新："
      "(全保管場所の現在庫×現原価＋入荷数量×仕入単価)÷(現在庫＋入荷数量)", ""),
-    ("P-01", "入荷確定", 6, "t_stock_movement に RECEIPT(+数量) を INSERT、t_inventory を加算（BR-02）。状態変更時は t_lot_status_history を INSERT", ""),
+    ("P-01", "入荷確定", 6, "t_stock_movement に RECEIPT(+数量, ref_type=receipt_line, ref_id=入荷明細ID) を INSERT、t_inventory を加算（BR-02）。状態変更時は t_lot_status_history を INSERT", ""),
     ("P-01", "入荷確定", 7, "発注引当時は t_purchase_order_line.received_qty を加算し、発注ステータスを PARTIAL/RECEIVED に更新", ""),
     ("P-01", "入荷確定", 8, "t_receipt.status=CONFIRMED、監査ログ記録、コミット。到着時温度が範囲外なら QA へ通知（分納分は P-16 で判定）", "MSG-W01"),
     ("P-02", "受入検品判定", 1, "ロック（P-00）：t_lot FOR UPDATE。status=QUARANTINE を確認", "MSG-E01"),
@@ -1069,10 +1082,10 @@ PROCESSES = [
     ("P-05", "出荷確定", 5, "unit_cost に t_lot.unit_cost を設定。明細 status=SHIPPED", ""),
     ("P-05", "出荷確定", 6, "t_sales_order_line.shipped_qty を加算し受注ステータスを PARTIAL/SHIPPED に更新", "MSG-E23"),
     ("P-05", "出荷確定", 7, "t_shipment.status=SHIPPED、監査ログ記録、コミット", ""),
-    ("P-06", "出荷取消", 1, "ロック（P-00）：対象ロット FOR SHARE → 在庫 → t_shipment・明細。"
+    ("P-06", "出荷取消", 1, "ロック（P-00）：対象ロット FOR SHARE → 在庫 → 受注 FOR UPDATE → t_shipment・明細。"
      "status=ALLOCATED：status=ALLOCATED の明細のみ allocated_qty を減算し CANCELLED、ヘッダも CANCELLED（在庫移動なし）", ""),
     ("P-06", "出荷取消", 2, "status=SHIPPED：ADMINのみ。返品がある明細を含む場合はエラー", "MSG-E14"),
-    ("P-06", "出荷取消", 3, "status=SHIPPED の明細のみ CANCEL(+数量) の在庫移動を INSERT、on_hand_qty 加算、受注の出荷済数量を減算し受注ステータスを再判定", ""),
+    ("P-06", "出荷取消", 3, "status=SHIPPED の明細のみ CANCEL(+数量) の在庫移動を INSERT、on_hand_qty 加算、受注の出荷済数量を減算し、ロック後の受注ステータスで再判定（CLOSED・CREDIT_PENDING は維持）", ""),
     ("P-06", "出荷取消", 4, "出荷明細は削除しない（BR-03）。明細・ヘッダ status=CANCELLED とし、トレース画面（SQL-01）では取消済として区別表示", ""),
     ("P-06", "出荷取消", 5, "対象ロットが未完了の回収案件に含まれる場合、P-18 を再実行して回収対象を更新", ""),
     ("P-07", "返品登録・判定", 1, "ロック（P-00）：ロット FOR SHARE → 在庫 → 元出荷明細 FOR UPDATE →（回収品は）回収案件・回収対象。返品数量 <= 元出荷数量 − 既返品数量 を検証（BR-12）", "MSG-E15"),
@@ -1081,8 +1094,8 @@ PROCESSES = [
     ("P-07", "返品登録・判定", 3, "登録：受入保管場所（is_quarantine=true・温度区分一致）へ RETURN(+数量) の移動・在庫加算。status=RECEIVED（引当対象外）", "MSG-E07"),
     ("P-07", "返品登録・判定", 4, "回収品の場合、recovered_qty＝当該回収対象の返品数量合計 に更新し、回収数量＋回収不能数量 >= 出荷正味数量 なら RECOVERED", ""),
     ("P-07", "返品登録・判定", 5, "判定=RESTOCK：ロットが RELEASED かつ回収品でないこと、戻し先の温度区分一致・通常保管場所を検証し、"
-     "ref=return で TRANSFER_OUT/TRANSFER_IN し移動（上限＝返品数量）。status=CLOSED", "MSG-E16,MSG-E30"),
-    ("P-07", "返品登録・判定", 6, "判定=DISPOSE：受入保管場所から ref=return で DISPOSE(−返品数量) を記録（BR-18：回収品は DISPOSE のみ）。status=CLOSED", ""),
+     "入力数量（払出し可能数以下）を ref=return で TRANSFER_OUT/TRANSFER_IN し移動。払出し可能数が0になれば status=CLOSED", "MSG-E16,MSG-E30"),
+    ("P-07", "返品登録・判定", 6, "判定=DISPOSE：受入保管場所から ref=return で DISPOSE(−払出し可能数) を記録（BR-18：回収品は DISPOSE のみ）。status=CLOSED", ""),
     ("P-07", "返品登録・判定", 7, "通常返品で対象ロットが未完了の回収案件に含まれる場合、P-18 を再実行して回収対象を更新", ""),
     ("P-08", "回収案件登録", 1, "対象ロットに VOID が含まれないことを検証", "MSG-E27"),
     ("P-08", "回収案件登録", 2, "ロック（P-00）：対象ロット FOR UPDATE。回収案件（status=OPEN）と t_recall_lot を INSERT", ""),
@@ -1092,7 +1105,8 @@ PROCESSES = [
     ("P-09", "温度記録・逸脱検知", 2, "逸脱時：測定日時時点で当該保管場所に在庫があったロット（移動履歴の moved_at <= measured_at の合計 > 0）を特定（BR-07）", "MSG-W05"),
     ("P-09", "温度記録・逸脱検知", 3, "ロック（P-00）。うち現在 QUARANTINE/RELEASED のロットを HOLD に更新（理由＝温度記録ID、履歴に記録）し、引当を解除（P-11）", ""),
     ("P-09", "温度記録・逸脱検知", 4, "測定日時以降に当該保管場所から出荷済の明細を抽出し、回収候補としてQAへ通知（回収要否はQAが判断し P-08 へ）", ""),
-    ("P-10", "在庫移動・調整・廃棄", 1, "ロック（P-00）。移動元が隔離保管場所（is_quarantine=true）の場合はエラー（隔離在庫の払出しは P-07/P-16/P-17 のみ）", "MSG-E28"),
+    ("P-10", "在庫移動・調整・廃棄", 1, "ロック（P-00）。移動元が隔離保管場所（is_quarantine=true）の場合はエラー（隔離在庫の払出しは P-07/P-16/P-17 のみ）。"
+     "例外：QA が出所伝票（ref）を指定した ADJUST/DISPOSE（理由必須・払出し可能数以下）で実数差異を処理できる", "MSG-E28,MSG-E30"),
     ("P-10", "在庫移動・調整・廃棄", 2, "移動：TRANSFER_OUT(−)/TRANSFER_IN(+) を同一トランザクションで INSERT。移動先の温度区分一致・通常保管場所を検証（BR-06）", "MSG-E07"),
     ("P-10", "在庫移動・調整・廃棄", 3, "調整・廃棄：理由必須。調整後の on_hand_qty が allocated_qty 未満になる場合はエラー", "MSG-E18"),
     ("P-11", "ロット指定の引当解除（共通）", 1, "呼出元でロットをロック済の前提。在庫 FOR UPDATE → 対象ロットの t_shipment_line(status=ALLOCATED) を FOR UPDATE", ""),
@@ -1112,9 +1126,9 @@ PROCESSES = [
     ("P-15", "ロットステータス変更（QA）", 2, "理由必須。HOLD→RELEASED は BR-17 を検証。inspected_at が NULL の HOLD は QUARANTINE にのみ解除可", "MSG-E09,MSG-E08"),
     ("P-15", "ロットステータス変更（QA）", 3, "status・status_reason を更新し t_lot_status_history を INSERT。HOLD/REJECTED への変更時は P-11 で引当解除", ""),
     ("P-16", "分納受入判定（QA）", 1, "ロック（P-00）：ロット → 在庫 → 対象入荷明細 FOR UPDATE。split_status=PENDING を確認（判定済なら MSG-E30）", "MSG-E30"),
-    ("P-16", "分納受入判定（QA）", 2, "到着時温度・COA（分納分）を確認し判定。合格：入荷明細の数量を ref=receipt_line で TRANSFER_OUT/IN し通常保管場所へ移動、"
+    ("P-16", "分納受入判定（QA）", 2, "到着時温度・COA（分納分）を確認し判定。合格：入力数量（払出し可能数以下）を ref=receipt_line で TRANSFER_OUT/IN し通常保管場所へ移動、"
      "split_status=ACCEPTED（ロットが RELEASED なら引当可能）", "MSG-E07"),
-    ("P-16", "分納受入判定（QA）", 3, "不合格：split_status=REJECTED とし、分納分を ref=receipt_line で DISPOSE するか仕入先返品（P-17）。ロット全体に影響する場合は P-15 で HOLD/REJECTED", ""),
+    ("P-16", "分納受入判定（QA）", 3, "不合格：split_status=REJECTED とし、分納分を ref=receipt_line で DISPOSE するか仕入先返品（P-17）。実数差異（破損・不足）は P-10 の隔離例外で処理。ロット全体に影響する場合は P-15 で HOLD/REJECTED", ""),
     ("P-17", "仕入先返品", 1, "ロック（P-00）：ロット → 在庫 → 返品元の入荷明細。払出し元が通常保管場所なら対象ロットは REJECTED/RECALLED/EXPIRED、"
      "隔離保管場所なら split_status=REJECTED の分納明細に限る（返品在庫は対象外）", "MSG-E29"),
     ("P-17", "仕入先返品", 2, "返品元の入荷明細は利用者が選択（移行ロットは ref_type=migration）。数量上限＝当該明細の入荷数量−同一 ref の払出し済数量。"
@@ -1292,6 +1306,7 @@ MESSAGES = [
     ("MSG-E29", "エラー", "現在のステータス（{status}）からはこの操作を実行できません。", "P-15 / P-17 遷移不可"),
     ("MSG-E30", "エラー", "出所伝票（{ref}）の払出し可能数（{available}）を超えているか、既に判定済です。", "P-00 ステップ7 / P-16 / P-17"),
     ("MSG-E31", "エラー", "変更後の受注は与信限度額を超えます。引当済の出荷があるため、先に引当を解除してから変更してください。", "P-03 与信再判定"),
+    ("MSG-E32", "エラー", "未確定の入荷（{receipt_no}）があるため発注を打切りできません。先に確定または削除してください。", "API-024"),
     ("MSG-W01", "警告", "到着時温度が保管温度区分の許容範囲外です。QAに通知されます。", "入荷時温度逸脱"),
     ("MSG-W02", "警告", "入荷数量が発注残数を超えています。登録してよろしいですか？", "過剰入荷"),
     ("MSG-W03", "警告", "与信限度額を超えます（与信残高{balance}円＋今回{amount}円 ＞ 限度額{limit}円）。管理者の承認が必要です。", "BR-11"),
