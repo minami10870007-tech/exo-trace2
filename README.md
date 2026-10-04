@@ -36,3 +36,45 @@ xlsx を直接編集すると次回の生成で上書きされます。変更は
 | `apps-script/test/` | モック環境でのテスト（`node apps-script/test/mock_test.js`、画面は `NODE_PATH=$(npm root -g) node apps-script/test/ui_test.js`） |
 
 導入手順：スプレッドシートで「拡張機能 > Apps Script」→ `コード.gs` を貼り付け → 「＋ > HTML」で `index` を作成し `index.html` を貼り付け → 保存してスプレッドシートを再読込 → メニュー「EXO-TRACE > 初期設定」→「画面を開く」。
+
+## Netlify 版（スマホ対応の操作画面）
+
+データは引き続き Google スプレッドシートに保存し、画面だけを Netlify で配信します。
+
+```
+ブラウザ（web/dist） ──/api──▶ Netlify Function（ログイン・セッション検証） ──▶ Apps Script doPost ──▶ スプレッドシート
+```
+
+| ファイル | 内容 |
+|---|---|
+| `netlify.toml` | ビルド設定・セキュリティヘッダー（CSP 等）・キャッシュ設定 |
+| `netlify/functions/api.mjs` | `/api`：ログイン（メール＋パスワード、12時間有効の署名付きトークン）と Apps Script への中継 |
+| `web/src/` | 画面（index.html / styles.css / app.js / PWA マニフェスト・アイコン） |
+| `web/build.mjs` | `web/dist` を生成（CSS/JS にハッシュを付けて長期キャッシュ） |
+| `scripts/hash-password.mjs` | 利用者登録用の文字列を作成 |
+| `web/test/` | ローカル検証サーバーとデザイン・レスポンシブ自動レビュー |
+
+### デプロイ手順
+
+1. **Apps Script 側**（スプレッドシートの「拡張機能 > Apps Script」）
+   1. `apps-script/コード.gs` を最新に貼り替えて保存
+   2. スプレッドシートのメニュー「EXO-TRACE > Netlify 連携シークレットの表示」で表示された値を控える
+   3. 「デプロイ > 新しいデプロイ > 種類：ウェブアプリ」、実行ユーザー＝**自分**、アクセスできるユーザー＝**全員** でデプロイし、URL（…/exec）を控える
+      （画面は公開されません。`doGet` は文字列を返すだけで、`doPost` はシークレットが一致する要求しか処理しません）
+2. **利用者の登録文字列を作成**（人数分）：`node scripts/hash-password.mjs taro@example.com 'パスワード12文字以上'`
+3. **Netlify**：このリポジトリを「Add new site > Import an existing project」で接続（ビルド設定は `netlify.toml` から自動で読まれます）し、環境変数を設定
+   | 変数 | 値 |
+   |---|---|
+   | `GAS_URL` | 手順1-3 の URL |
+   | `GAS_SECRET` | 手順1-2 の値 |
+   | `SESSION_SECRET` | ランダムな長い文字列（例：`openssl rand -hex 32`） |
+   | `EXO_USERS` | 手順2 の出力をセミコロン `;` 区切りで連結 |
+4. デプロイ後、サイトにアクセスしてログイン。スマホではブラウザの「ホーム画面に追加」でアプリのように使えます。
+
+### ローカルで確認・レビュー
+
+```bash
+node web/build.mjs
+node web/test/serve.mjs                       # http://127.0.0.1:8888（demo@example.com / demo-password-123、サンプルデータ入り）
+NODE_PATH=$(npm root -g) node web/test/review.mjs web/test/out   # 7種の画面幅で全画面を自動レビュー＋操作テスト
+```

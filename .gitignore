@@ -1,1 +1,6 @@
 __pycache__/
+web/dist/
+web/test/out/
+apps-script/test/out/
+node_modules/
+.netlify/

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F5F73" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F1518" media="(prefers-color-scheme: dark)">
+<meta name="description" content="エクソソームの仕入・在庫・販売・回収をロット単位で追跡するトレーサビリティ管理システム">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="EXO-TRACE">
+<title>EXO-TRACE</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/assets/styles.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 4h16l1 9v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6zM3.5 13H8l1.5 3h5L16 13h4.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6zM8.5 12l2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-truck" viewBox="0 0 24 24"><path d="M2 6h11v10H2zM13 9h4l4 4v3h-8zM6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM17 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+</svg>
+
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<!-- ログイン -->
+<div class="login" id="login" hidden>
+  <form class="login-card" id="loginForm" novalidate>
+    <div class="brand brand-lg"><img src="/icon.svg" alt="" width="40" height="40"><div><b>EXO-TRACE</b><span>エクソソーム仕入・販売トレーサビリティ</span></div></div>
+    <div class="field"><label for="loginEmail">メールアドレス</label><input id="loginEmail" type="email" autocomplete="username" inputmode="email" required></div>
+    <div class="field"><label for="loginPassword">パスワード</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+    <div id="loginMsg" role="alert"></div>
+    <button class="btn btn-primary btn-block" type="submit">ログイン</button>
+  </form>
+</div>
+
+<!-- アプリ本体 -->
+<div class="shell" id="app" hidden>
+  <aside class="sidebar" aria-label="メインメニュー">
+    <div class="brand"><img src="/icon.svg" alt="" width="32" height="32"><div><b>EXO-TRACE</b><span>トレーサビリティ管理</span></div></div>
+    <nav class="side-nav" id="sideNav"></nav>
+    <div class="side-foot">
+      <div class="who" id="whoSide"></div>
+      <button class="btn btn-ghost btn-sm" type="button" data-action="logout"><svg class="ic"><use href="#i-logout"/></svg>ログアウト</button>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <div class="topbar-brand"><img src="/icon.svg" alt="" width="28" height="28"></div>
+    <h1 id="pageTitle">ダッシュボード</h1>
+    <div class="topbar-actions">
+      <button class="icon-btn" type="button" data-action="reload" aria-label="最新の情報に更新"><svg class="ic"><use href="#i-refresh"/></svg></button>
+    </div>
+  </header>
+
+  <main class="main" id="main" tabindex="-1">
+
+    <section class="page" id="page-dashboard" aria-labelledby="pageTitle">
+      <div class="kpis" id="dashKpis"></div>
+      <div class="dash-grid" id="dashBody"></div>
+    </section>
+
+    <section class="page" id="page-receipt" hidden>
+      <form class="card" id="receiptForm" novalidate>
+        <h2 class="card-title">入荷登録</h2>
+        <p class="card-sub">入荷したロットは「検品待ち」になり、QAの合格判定後に出荷できます。</p>
+        <div class="form-grid">
+          <div class="field"><label for="rcSupplier">仕入先</label><select id="rcSupplier" required></select></div>
+          <div class="field"><label for="rcProduct">商品</label><select id="rcProduct" required></select></div>
+          <div class="field"><label for="rcSupLot">仕入先ロット番号</label><input id="rcSupLot" autocomplete="off" autocapitalize="characters" required></div>
+          <div class="field"><label for="rcDate">入荷日</label><input id="rcDate" type="date" required></div>
+          <div class="field"><label for="rcMfg">製造日 <span class="opt">任意</span></label><input id="rcMfg" type="date"></div>
+          <div class="field"><label for="rcExp">使用期限</label><input id="rcExp" type="date" required><small>製造日＋有効期間を自動入力</small></div>
+          <div class="field"><label for="rcQty">入荷数量</label><input id="rcQty" type="number" inputmode="numeric" min="1" step="1" required></div>
+          <div class="field"><label for="rcPrice">仕入単価（円・税抜）</label><input id="rcPrice" type="number" inputmode="decimal" min="0" step="0.01" required></div>
+          <div class="field"><label for="rcTemp">到着時温度（℃） <span class="opt">任意</span></label><input id="rcTemp" type="number" inputmode="decimal" step="0.1"></div>
+          <div class="field"><label for="rcLoc">入庫保管場所</label><select id="rcLoc" required></select></div>
+        </div>
+        <div id="rcMsg"></div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">入荷を確定</button></div>
+      </form>
+    </section>
+
+    <section class="page" id="page-inspect" hidden>
+      <div class="toolbar">
+        <div class="segmented" role="tablist" aria-label="表示するロット" id="insFilter">
+          <button type="button" role="tab" data-filter="QUARANTINE,HOLD" aria-selected="true">検品待ち・保留</button>
+          <button type="button" role="tab" data-filter="RELEASED" aria-selected="false">合格</button>
+          <button type="button" role="tab" data-filter="" aria-selected="false">すべて</button>
+        </div>
+      </div>
+      <div id="insMsg"></div>
+      <div class="cards-list" id="insBody"></div>
+    </section>
+
+    <section class="page" id="page-shipment" hidden>
+      <form class="card" id="shipForm" novalidate>
+        <h2 class="card-title">出荷登録</h2>
+        <p class="card-sub">使用期限の近いロットから自動で割り当てます（合格済・最低出荷残期間以上・隔離保管場所以外）。</p>
+        <div class="form-grid">
+          <div class="field"><label for="shCustomer">顧客</label><select id="shCustomer" required></select></div>
+          <div class="field"><label for="shDate">出荷日</label><input id="shDate" type="date" required></div>
+          <div class="field span-2"><label for="shNote">備考 <span class="opt">任意</span></label><input id="shNote" autocomplete="off"></div>
+        </div>
+        <h3 class="section-title">明細</h3>
+        <div class="lines" id="shLines"></div>
+        <button class="btn btn-secondary btn-sm" type="button" data-action="addLine"><svg class="ic"><use href="#i-plus"/></svg>明細を追加</button>
+        <div id="shMsg"></div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">出荷を確定</button></div>
+      </form>
+      <div class="card">
+        <h2 class="card-title">最近の出荷</h2>
+        <div id="shRecent"></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-return" hidden>
+      <div class="card">
+        <h2 class="card-title">返品登録</h2>
+        <form class="search-row" id="rtSearch" novalidate>
+          <label class="sr-only" for="rtShipNo">出荷番号</label>
+          <input id="rtShipNo" placeholder="出荷番号（例 SH-202610-0001）" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
+          <button class="btn btn-secondary" type="submit">検索</button>
+        </form>
+        <div id="rtShipment"></div>
+      </div>
+      <form class="card" id="rtForm" hidden novalidate>
+        <h2 class="card-title">返品内容</h2>
+        <p class="card-sub" id="rtLineInfo"></p>
+        <div class="form-grid">
+          <div class="field"><label for="rtQty">返品数量</label><input id="rtQty" type="number" inputmode="numeric" min="1" step="1" required></div>
+          <div class="field"><label for="rtDate">返品日</label><input id="rtDate" type="date" required></div>
+          <div class="field"><label for="rtQLoc">受入保管場所（隔離）</label><select id="rtQLoc" required></select></div>
+          <div class="field"><label for="rtDisp">処置</label><select id="rtDisp"><option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></div>
+          <div class="field" id="rtRLocWrap" hidden><label for="rtRLoc">戻し保管場所</label><select id="rtRLoc"></select></div>
+          <div class="field span-full"><label for="rtReason">返品理由</label><textarea id="rtReason" rows="3" required></textarea></div>
+        </div>
+        <p class="note">回収中のロットは自動的に回収品として登録され、処置は廃棄のみになります。</p>
+        <div id="rtMsg"></div>
+        <div class="form-actions"><button class="btn btn-secondary" type="button" data-action="cancelReturn">キャンセル</button><button class="btn btn-primary" type="submit">返品を登録</button></div>
+      </form>
+    </section>
+
+    <section class="page" id="page-inventory" hidden>
+      <div class="toolbar">
+        <label class="sr-only" for="invFilter">絞り込み</label>
+        <input id="invFilter" type="search" placeholder="商品名・ロット番号で絞り込み" autocomplete="off">
+        <label class="check"><input type="checkbox" id="invAvail"><span>引当可のみ</span></label>
+      </div>
+      <div class="card card-flush" id="invBody"></div>
+    </section>
+
+    <section class="page" id="page-traceLot" hidden>
+      <div class="card">
+        <form class="search-row" id="tlSearch" novalidate>
+          <label class="sr-only" for="tlQuery">ロット番号</label>
+          <input id="tlQuery" type="search" placeholder="社内ロット番号 または 仕入先ロット番号" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
+          <button class="btn btn-primary" type="submit"><svg class="ic"><use href="#i-search"/></svg>追跡</button>
+        </form>
+        <p class="note">部分一致で検索できます。販売先・顧客の手元に残っている数量・在庫・ステータス履歴を表示します。</p>
+      </div>
+      <div id="tlBody"></div>
+    </section>
+
+    <section class="page" id="page-traceCustomer" hidden>
+      <form class="card" id="tcSearch" novalidate>
+        <div class="form-grid">
+          <div class="field"><label for="tcCustomer">顧客</label><select id="tcCustomer" required></select></div>
+          <div class="field"><label for="tcFrom">出荷日（から）</label><input id="tcFrom" type="date"></div>
+          <div class="field"><label for="tcTo">出荷日（まで）</label><input id="tcTo" type="date"></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit"><svg class="ic"><use href="#i-search"/></svg>購入ロットを表示</button></div>
+      </form>
+      <div id="tcBody"></div>
+    </section>
+
+    <section class="page" id="page-recall" hidden>
+      <details class="card disclosure" id="rcNew">
+        <summary><span class="card-title">新しい回収案件を登録</span><svg class="ic chev"><use href="#i-plus"/></svg></summary>
+        <form id="recallForm" novalidate>
+          <div class="form-grid">
+            <div class="field"><label for="rcTitle">件名</label><input id="rcTitle" required></div>
+            <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required><option value="">選択してください</option><option value="I">クラスI</option><option value="II">クラスII</option><option value="III">クラスIII</option></select></div>
+            <div class="field span-full"><label for="rcReason">回収理由</label><textarea id="rcReason" rows="3" required></textarea></div>
+          </div>
+          <fieldset class="field span-full"><legend>対象ロット</legend><div class="check-list" id="rcLots"></div></fieldset>
+          <div id="rclFormMsg"></div>
+          <div class="form-actions"><button class="btn btn-danger" type="submit">回収を開始（対象ロットを出荷停止）</button></div>
+        </form>
+      </details>
+      <div id="rclMsg"></div>
+      <div id="rclList"></div>
+    </section>
+
+    <section class="page" id="page-master" hidden>
+      <div class="toolbar">
+        <div class="segmented" role="tablist" aria-label="マスタの種類" id="msTabs">
+          <button type="button" role="tab" data-table="m_product" aria-selected="true">商品</button>
+          <button type="button" role="tab" data-table="m_customer" aria-selected="false">顧客</button>
+          <button type="button" role="tab" data-table="m_supplier" aria-selected="false">仕入先</button>
+          <button type="button" role="tab" data-table="m_location" aria-selected="false">保管場所</button>
+          <button type="button" role="tab" data-table="rules" aria-selected="false">販売可否</button>
+        </div>
+        <button class="btn btn-primary btn-sm" type="button" data-action="newMaster" id="msNew"><svg class="ic"><use href="#i-plus"/></svg>新規登録</button>
+      </div>
+      <div id="msMsg"></div>
+      <div class="card card-flush" id="msList"></div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" id="bottomNav" aria-label="メインメニュー"></nav>
+</div>
+
+<!-- その他メニュー（モバイル） -->
+<div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+<div class="sheet" id="moreSheet" role="dialog" aria-modal="true" aria-labelledby="moreTitle" hidden>
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head"><h2 id="moreTitle">メニュー</h2><button class="icon-btn" type="button" data-action="closeSheet" aria-label="閉じる"><svg class="ic"><use href="#i-x"/></svg></button></div>
+  <nav class="sheet-nav" id="sheetNav"></nav>
+  <div class="sheet-foot"><span class="who" id="whoSheet"></span><button class="btn btn-ghost btn-sm" type="button" data-action="logout"><svg class="ic"><use href="#i-logout"/></svg>ログアウト</button></div>
+</div>
+
+<!-- 確認・入力ダイアログ -->
+<dialog class="dialog" id="dialog" aria-labelledby="dialogTitle">
+  <form method="dialog" id="dialogForm">
+    <h2 id="dialogTitle"></h2>
+    <p id="dialogBody"></p>
+    <div class="field" id="dialogInputWrap" hidden><label for="dialogInput" id="dialogInputLabel"></label><textarea id="dialogInput" rows="3"></textarea></div>
+    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="ok" type="submit" id="dialogOk">OK</button></div>
+  </form>
+</dialog>
+
+<!-- マスタ編集（フルスクリーン on モバイル） -->
+<dialog class="dialog dialog-lg" id="masterDialog" aria-labelledby="masterTitle">
+  <form method="dialog" id="masterForm" novalidate>
+    <div class="dialog-head"><h2 id="masterTitle"></h2><button class="icon-btn" value="cancel" type="submit" formnovalidate aria-label="閉じる"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="form-grid" id="masterFields"></div>
+    <div id="masterMsg"></div>
+    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="save" type="submit">保存</button></div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">このアプリを利用するには JavaScript を有効にしてください。</p></noscript>
+</body>
+</html>

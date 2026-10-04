@@ -1,0 +1,49 @@
+# EXO-TRACE（Netlify）
+#   画面: web/src → web/dist（node web/build.mjs でハッシュ付きアセットを生成）
+#   API : netlify/functions/api.mjs（/api。Apps Script へ中継）
+
+[build]
+  command = "node web/build.mjs"
+  publish = "web/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# 全ページ共通のセキュリティヘッダー
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    X-Robots-Tag = "noindex, nofollow"
+
+# ハッシュ付きアセットは1年キャッシュ
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# HTML とマニフェストは常に最新を確認
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Content-Type = "application/manifest+json; charset=utf-8"
