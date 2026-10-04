@@ -504,7 +504,7 @@ async function findShipmentForReturn(e, keepMsg) {
   await busy(btn, async () => {
     try {
       const s = await api('getShipmentByNo', $('rtShipNo').value);
-      $('rtShipment').innerHTML = `<p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>　${esc(s.shipped_on)}　${esc(s.customer)} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>` +
+      $('rtShipment').innerHTML = `<p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>` +
         table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
           s.lines.map((l) => ({ attrs: rowAlert(l.lot_status_code), cells: [html(esc(l.product)), html(mono(l.lot_no)), html(badge(l.lot_status_code, l.lot_status)), num(l.quantity), num(l.returned), num(l.returnable),
             l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.lot_status_code === 'RECALLED' ? 1 : ''}">この明細を返品</button>`) : ''] })));
@@ -668,9 +668,9 @@ function renderRecall(r) {
   const targets = r.targets.length ? r.targets.map((t) => {
     const editable = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED';
     const open = t.status === 'NOT_CONTACTED';
-    const form = ed ? `<details class="target-edit"${open ? ' open' : ''}><summary>${open ? '連絡・回収状況を入力' : '進捗を更新'}</summary><div class="target-grid">
+    const form = ed ? `<details class="target-edit"${open ? ' open' : ''}><summary>進捗を更新</summary><div class="target-grid">
         <div class="field f-date"><label for="cd_${t.id}">連絡日</label><input type="date" id="cd_${t.id}" value="${esc(t.contacted_on)}"></div>
-        <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}">${['', '電話', 'メール', '訪問'].map((m) => `<option${m === t.contact_method ? ' selected' : ''}>${m}</option>`).join('')}</select></div>
+        <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}"></div>
         ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}"><option value="">変更しない</option><option value="CONTACTED">連絡済にする</option><option value="CLOSED">クローズする</option></select></div>` : ''}
         <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" autocomplete="off"></div>

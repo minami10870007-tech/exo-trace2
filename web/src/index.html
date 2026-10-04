@@ -147,7 +147,7 @@
       <form class="card" id="rtForm" hidden novalidate>
         <h2 class="card-title">返品内容</h2>
         <p class="card-sub" id="rtLineInfo"></p>
-        <div class="form-grid">
+        <div class="form-grid four">
           <div class="field"><label for="rtQty">返品数量</label><input id="rtQty" type="number" inputmode="numeric" min="1" step="1" required></div>
           <div class="field"><label for="rtDate">返品日</label><input id="rtDate" type="date" required></div>
           <div class="field"><label for="rtQLoc">受入保管場所（隔離）</label><select id="rtQLoc" required></select></div>
@@ -199,7 +199,7 @@
         <summary><span class="card-title">新しい回収案件を登録</span><svg class="ic chev"><use href="#i-plus"/></svg></summary>
         <form id="recallForm" novalidate>
           <div class="form-grid">
-            <div class="field"><label for="rcTitle">件名</label><input id="rcTitle" required></div>
+            <div class="field span-2"><label for="rcTitle">件名</label><input id="rcTitle" required></div>
             <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required><option value="">選択してください</option><option value="I">クラスI</option><option value="II">クラスII</option><option value="III">クラスIII</option></select></div>
             <div class="field span-full"><label for="rcReason">回収理由</label><textarea id="rcReason" rows="3" required></textarea></div>
           </div>

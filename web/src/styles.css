@@ -500,7 +500,7 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
   .line .field-product { grid-column: auto; }
   .line .line-remove { grid-column: auto; }
   .lot-card .lot-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .lot-card .lot-action { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto auto; align-items: end; }
+  .lot-card .lot-action { grid-template-columns: minmax(11.5em, 1fr) minmax(0, 2fr) auto auto; align-items: end; }
   .target-grid { align-items: end; }
   .target-grid .f-date, .target-grid .f-status { grid-column: auto; }
   .sheet-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -646,3 +646,5 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 @media (min-width: 768px) { .rtable:not(.wide-table) td { vertical-align: middle; } }
 @media (min-width: 1280px) { .rtable.wide-table td { vertical-align: middle; } }
 @media (min-width: 1024px) { input[type="date"] { min-height: 40px; } }
+
+@media (min-width: 1024px) { .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
