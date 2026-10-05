@@ -195,9 +195,18 @@ function resetScopeOf(el) {
 /** 前回の確定が「登録できたか分からない」まま、内容を変えずに再送しようとしているか */
 const resending = (formId) => !!(S.unsure[formId] && S.req[formId]);
 
+/** 登録内容を整える：前後の空白を除き、空の明細を外す（サーバーが無視する違いで「内容が変わった」とならないように） */
+function normPayload(v) {
+  if (typeof v === 'string') return v.trim();
+  if (Array.isArray(v)) return v.map(normPayload).filter((x) => !(x && typeof x === 'object' && !Array.isArray(x) && Object.values(x).every((y) => y === '' || y === null || y === undefined)));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, normPayload(x)]));
+  return v;
+}
+
 async function api(fn, ...args) {
-  const p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
+  let p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
   const form = typeof WRITE_FORM[fn] === 'function' ? WRITE_FORM[fn](p) : WRITE_FORM[fn];
+  if (form) p = normPayload(p);
   if (form) p.requestId = S.req[form] || (S.req[form] = newId());
   const online = navigator.onLine;
   let sent = false;
@@ -222,7 +231,9 @@ async function api(fn, ...args) {
       // 前回送った内容が登録済みだった。いま画面にある（変更後の）内容は登録していないので、成功扱いにせず、そのまま残して知らせる
       resetRequest(form); // 次の確定は、いまの内容の新しい依頼として送る
       const no = data.shipment_no || data.receiptNo || data.returnNo || data.recall_no || data.lot_no || data.lotNo || '';
-      throw Object.assign(new Error(`前回送った内容${no ? `（${no}）` : ''}は登録済みでした。いま入力中の内容は、まだ登録されていません。内容を確認して、もう一度同じ操作をしてください。`), { replayedOther: true, result: data });
+      // 何が登録されたかも示す（もう一度送る必要があるかを判断できるように）
+      const what = Array.isArray(data.lines) ? '：' + data.lines.map((l) => `${l.product} × ${l.quantity}`).join('、') : data.lotNo ? `：ロット ${data.lotNo}` : '';
+      throw Object.assign(new Error(`前回送った内容（${no}${what}）は登録済みでした。いま入力中の内容は、まだ登録されていません。\n追加で登録する場合だけ、もう一度同じ操作をしてください（前回の内容を直したい場合は、登録済みのほうを取消・処分してください）。`), { replayedOther: true, result: data });
     }
     if (form) resetRequest(form); // 登録できた：次は新しい依頼
     return data;
@@ -1312,6 +1323,12 @@ async function changeStatus(btn) {
       const reason0 = $('rs_' + id) ? $('rs_' + id).value : '';
       const lotNo0 = card0 ? card0.querySelector('.lot-no').textContent : '';
       await loadInspect().catch(() => {});
+      if (err.unsure && $('to_' + id) && $('to_' + id).dataset.status === to) { // 通信は切れたが、判定は登録されていた
+        resetRequest('lot_' + id);
+        guideAfterAction();
+        alertBox('insMsg', `通信が途切れましたが、ロット ${lotNo0} は「${code('lot_status', to)}」に登録されていました。`, 'ok');
+        return;
+      }
       const gone = (/他の利用者/.test(err.message) || err.unsure) && !$('to_' + id);
       if (gone) { S.insFocusLot = lotNo0; S.insReason = { id, reason: reason0, to: $('to_' + id) ? '' : to }; }
       const typed = !$('rs_' + id) && reason0.trim() ? `\n入力していた理由：${reason0.trim()}` : ''; // 欄が消えても、入力した理由を写せるように
@@ -1418,7 +1435,7 @@ async function submitShipment(e) {
     alertBox('shMsg', '');
     $('shDone').innerHTML = '';
     try {
-      const s = await api('createShipment', { customerId: $('shCustomer').value, shippedOn: $('shDate').value, note: $('shNote').value, lines });
+      const s = await api('createShipment', { customerId: $('shCustomer').value, shippedOn: $('shDate').value, note: $('shNote').value, lines: lines.filter((l) => l.productId) });
       alertBox('shMsg', '');
       $('shDone').innerHTML = `<div class="alert alert-ok" role="status" tabindex="-1" data-no="${esc(s.shipment_no)}"><div class="alert-text">出荷を確定しました。出荷番号 <span class="mono">${esc(s.shipment_no)}</span>（${esc(s.customer)}）
         <div class="alert-actions">${[...new Set(s.lines.map((l) => l.lot_no))].slice(0, 4).map((no) => `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(no)}">${esc(no)} を追跡</button>`).join('')}</div></div></div>` +

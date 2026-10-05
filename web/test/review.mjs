@@ -533,6 +533,10 @@ for (const vp of VIEWPORTS) {
     } finally { await page.unroute('**/rpc/save_master'); globalThis.EXPECT_NET_ERR = false; }
     await page.click('#msTabs [data-table="m_product"]'); await idle(page);
   });
+  await step('登録内容の正規化：前後の空白・空の明細は「内容の違い」にしない', async () => {
+    const r = await page.evaluate(() => JSON.stringify(normPayload({ note: ' x ', lines: [{ productId: '1', quantity: '2' }, { productId: '', quantity: '', unitPrice: '' }] })));
+    if (r !== JSON.stringify({ note: 'x', lines: [{ productId: '1', quantity: '2' }] })) throw new Error(r);
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
