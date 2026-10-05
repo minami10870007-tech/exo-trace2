@@ -413,6 +413,9 @@ def ddl():
             if fk:
                 ft, fc = fk.split(".")
                 d += f" REFERENCES {ft}({fc})"
+                if ft == t:
+                    # 自己参照FKは初期行を投入できなくなるため遅延検査にする
+                    d += " DEFERRABLE INITIALLY DEFERRED"
             defs.append(d)
         out += [d + ("," if i < len(defs) - 1 else "") for i, d in enumerate(defs)]
         out.append(");")
