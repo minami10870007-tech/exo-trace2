@@ -456,6 +456,14 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(() => { alertBox('rcMsg', ''); document.querySelectorAll('#receiptForm [aria-invalid]').forEach((x) => x.removeAttribute('aria-invalid')); });
     }
   });
+  await step('マスタを保存したら、キーボードのフォーカスが保存した行に戻る', async () => {
+    await page.evaluate(() => { location.hash = '#/master'; }); await idle(page);
+    await page.click('#msList [data-action="editMaster"]'); await page.waitForSelector('#masterDialog[open]');
+    const v = await page.inputValue('#mf_name'); await page.fill('#mf_name', v + ' '); await page.fill('#mf_name', v);
+    await page.click('#masterForm button[value="save"]'); await page.waitForFunction(() => !document.getElementById('masterDialog').open); await idle(page);
+    await page.waitForFunction(() => document.activeElement && document.activeElement.closest('#msList'), null, { timeout: 5000 })
+      .catch(async () => { throw new Error('フォーカスが一覧に戻らない: ' + (await page.evaluate(() => document.activeElement && document.activeElement.tagName))); });
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);

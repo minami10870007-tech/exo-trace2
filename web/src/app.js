@@ -762,6 +762,12 @@ async function reloadMasters(opts = {}) {
       sel.setAttribute('aria-invalid', 'true');
     }
   });
+  // 有効な商品が1つだけになったら、まだ触っていない最初の明細で選んでおく（明細を追加したときと同じ）
+  const fl = $('shLines').firstElementChild;
+  if (fl && prod.length === 1 && !fl.dataset.cleared && !fl.querySelector('.slProd').value && !fl.querySelector('.slQty').value) {
+    const sel = fl.querySelector('.slProd'); sel.value = String(prod[0].id);
+    fl.querySelector('.slPrice').value = prod[0].list_price !== null && prod[0].list_price !== undefined ? prod[0].list_price : ''; setPriceHint(fl, prod[0]); updateLineAvail(fl);
+  }
   const say = (msg, list) => {
     if (!list.length) return;
     // 自分がマスタで保存した項目だけ「マスタで無効にした」、それ以外は他の利用者による変更
@@ -1429,7 +1435,7 @@ async function loadRecentShipments() {
   const list = await api('getRecentShipments', 30);
   $('shRecent').innerHTML = table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '明細', cls: 'wide' },
     { label: '金額（円）', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '', cls: 'actions' }],
-    list.map((s) => ({ cells: [html(mono(s.shipment_no)), s.shipped_on, s.customer,
+    list.map((s) => ({ attrs: ` data-no="${esc(s.shipment_no)}"`, cells: [html(mono(s.shipment_no)), s.shipped_on, s.customer,
       html(s.lines.map((l) => `<div class="li"><span>${esc(l.product)}</span><span class="li-sub"><span class="mono">${esc(l.lot_no)}</span> × ${l.quantity}${l.returned ? `（返品 ${l.returned}）` : ''}</span></div>`).join('')),
       num(s.amount), html(s.status === 'SHIPPED' ? badge('ok', '出荷済') : badge('ng', '取消')),
       s.status === 'SHIPPED' ? html(`<button type="button" class="btn btn-danger-text btn-sm" data-action="cancelShip" data-id="${s.id}" data-no="${esc(s.shipment_no)}">出荷を取消</button>`) : ''] })),
@@ -1448,6 +1454,7 @@ async function cancelShip(btn) {
       const done = $('shDone').firstElementChild;
       if (done && done.dataset.no === btn.dataset.no) alertBox('shDone', `出荷 ${btn.dataset.no} は取消済みです（在庫に戻しました）。`, 'warn', true);
       await loadShipmentPage();
+      focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent')); // 取消した出荷の行へ
     } catch (err) { toast(err.message, 'ng'); }
   });
 }
@@ -1937,16 +1944,17 @@ async function searchCustomer(e, fromUrl) {
       if (key() !== asked) return; // 待っている間に条件が変わった（古い結果で上書きしない）
       const c = r.customer;
       const total = r.rows.reduce((s, x) => s + x.net, 0);
+      const ranged = $('tcFrom').value || $('tcTo').value; // 期間を指定したときは、その期間の出荷分だけの集計であることを示す
       $('tcBody').innerHTML = `<div class="card"><div class="card-head"><div><h2 class="card-title">${esc(c.name)}</h2>
           <p class="card-sub">${joinNw([c.customer_code, code('customer_type', c.customer_type), c.address])}</p>
           <div class="card-sub contacts">${[telLink(c.phone), mailLink(c.email)].filter(Boolean).map((v) => `<span class="contact">${v}</span>`).join('')}</div></div>
-          <span class="badge b-neutral">手元 ${fmt(total)}</span></div>
+          <span class="badge b-neutral">${ranged ? '期間内の出荷分 手元' : '手元'} ${fmt(total)}</span></div>
         <p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retraceCustomer">${icon('refresh')}最新にする</button></p>
         ${table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, { label: '出荷日', cls: 'nowrap' }, '出荷番号', { label: '使用期限', cls: 'nowrap' },
           { label: 'ロット状態', cls: 'status' }, { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '手元', cls: 'num' }],
           r.rows.map((x) => ({ attrs: ` class="clickable${ALERT_STATUS.has(x.lot_status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(x.lot_no)}" tabindex="0" aria-label="${esc(x.lot_no)} を追跡"`, cells: [html(mono(x.lot_no)), x.product, x.shipped_on, html(mono(x.shipment_no)),
             x.expires_on, html(badge(x.lot_status, x.lot_status_label)), num(x.quantity), num(x.returned), num(x.net)] })),
-          { empty: '出荷実績はありません', emptyIcon: 'truck' })}</div>`;
+          { empty: ranged ? 'この期間の出荷実績はありません' : '出荷実績はありません', emptyIcon: 'truck' })}</div>`;
       if (S.page === 'traceCustomer') {
         const qs = new URLSearchParams({ c: $('tcCustomer').value }); // 再読み込みしても同じ検索を出せるように
         if ($('tcFrom').value) qs.set('from', $('tcFrom').value);
@@ -2022,7 +2030,7 @@ function renderRecall(r) {
     <h3 class="section-title">対象顧客</h3>${targets}
     ${ed ? `<p class="note">回収品の受入は「返品登録」で行うと回収数に自動で反映されます。</p>
       <div class="form-actions"><button type="button" class="btn btn-secondary" data-action="reextract" data-id="${r.id}">${icon('refresh')}対象を再抽出</button>
-      <button type="button" class="btn ${r.openTargets || r.remainingStock > 0 ? 'btn-secondary' : 'btn-primary'}" data-action="closeRecall" data-id="${r.id}" data-open="${r.openTargets}" data-left="${r.shippedQty - r.doneQty}" data-uncontacted="${r.uncontacted}" data-stock="${r.remainingStock}">回収を完了</button></div>` : ''}</article>`;
+      <button type="button" class="btn ${r.openTargets || r.remainingStock > 0 ? 'btn-secondary' : 'btn-primary'}" data-action="closeRecall" data-id="${r.id}" data-targets="${r.targets.length}" data-open="${r.openTargets}" data-left="${r.shippedQty - r.doneQty}" data-uncontacted="${r.uncontacted}" data-stock="${r.remainingStock}">回収を完了</button></div>` : ''}</article>`;
 }
 
 async function submitRecall(e) {
@@ -2031,7 +2039,7 @@ async function submitRecall(e) {
   alertBox('rclFormMsg', '');
   if (!checkRequired($('recallForm'), 'rclFormMsg')) return;
   if (!lotIds.length) { alertBox('rclFormMsg', '対象ロットを1件以上選択してください。', 'ng'); return; }
-  if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロットを回収対象にし、出荷を停止します。`, okText: '回収を開始', danger: true }))) return;
+  if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロット（${[...$('rcLots').querySelectorAll('input:checked')].map((i) => i.closest('label').querySelector('b').textContent).join('、')}）を回収対象にし、出荷を停止します。`, okText: '回収を開始', danger: true }))) return;
   await busy(e.submitter, async () => {
     try {
       const r = await api('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds });
@@ -2137,7 +2145,11 @@ async function saveTarget(btn) {
 
 async function reextract(btn) {
   await busy(btn, async () => {
-    try { await api('reextractRecall', btn.dataset.id); toast('対象顧客を再抽出しました'); await loadRecalls(); } catch (err) { toast(err.message, 'ng'); }
+    try {
+      const id = btn.dataset.id;
+      await api('reextractRecall', id); toast('対象顧客を再抽出しました'); await loadRecalls();
+      focusTo($('rclList').querySelector(`[data-action="reextract"][data-id="${CSS.escape(id)}"]`) || $('rclList')); // 描き直したボタンへ
+    } catch (err) { toast(err.message, 'ng'); }
   });
 }
 
@@ -2145,7 +2157,7 @@ async function closeRecall(btn) {
   const open = Number(btn.dataset.open || 0);
   const body = open ? `未完了の対象顧客が ${open} 件（未回収 ${btn.dataset.left}・未連絡 ${btn.dataset.uncontacted} 件）残っているため、まだ完了できません。\n\n各顧客について、回収品を「返品登録」で受け入れる（自動で「回収済」になります）か、回収できない場合は「進捗を更新」で回収不能数を入れるかクローズしてください。`
     : (Number(btn.dataset.stock) > 0 ? `回収対象ロットの在庫 ${fmt(btn.dataset.stock)} が、まだ処分されていません（在庫照会で確認できます）。在庫照会の「処分」から廃棄・仕入先返品を記録してから完了することをおすすめします。\n\n` : '') +
-      '完了後は対象顧客の進捗を変更できません。';
+      (Number(btn.dataset.targets) > 0 ? '完了後は対象顧客の進捗を変更できません。' : '出荷実績のある顧客はいません。完了すると、この回収案件は終了します。');
   if (open) { await ask({ title: '回収はまだ完了できません', body, okText: 'わかりました', noCancel: true }); return; }
   if (!(await ask({ title: Number(btn.dataset.stock) > 0 ? '未処分の在庫がありますが、完了しますか？' : '回収を完了しますか？', body, okText: '完了にする' }))) return;
   await busy(btn, async () => {
@@ -2295,12 +2307,17 @@ async function saveMasterForm(e) {
         (before.toUpperCase() === String(data[codeKey]).trim().toUpperCase() ? '\n（コードは大文字にそろえて保存します）' : ''), okText: '変更して保存' }))) return;
   await busy(e.submitter, async () => {
     try {
-      await api('saveMaster', t, data);
+      const saved = await api('saveMaster', t, data);
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
       guideAfterAction();
       await reloadMasters({ self: { key: MASTER[t].key, id: data.id || '' } });
       await loadMaster();
+      // 一覧を描き直すと開いた行が消えるので、保存した行にフォーカスを戻す（キーボードで続けて操作できるように）
+      const sid = (saved && saved.id) || data.id;
+      const row = (sid && $('msList').querySelector(`[data-action="editMaster"][data-id="${CSS.escape(String(sid))}"]`))
+        || [...$('msList').querySelectorAll('[data-action="editMaster"]')].find((r) => r.textContent.includes(String(data[codeKey] || '').trim()));
+      focusTo(row || $('msNew'));
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
         // 最新の内容を取り込む：自分が変えていない項目は最新の値に、両方が変えた項目は自分の値のまま並べて見せる
@@ -2459,7 +2476,7 @@ const ACTIONS = {
   addLine, removeLine: (el) => {
     const line = el.closest('.line'), prev = line.previousElementSibling;
     line.remove();
-    if (!$('shLines').children.length) addLine(true); // 自分で消したので、自動では選び直さない
+    if (!$('shLines').children.length) { addLine(true); $('shLines').firstElementChild.dataset.cleared = '1'; } // 自分で消したので、自動では選び直さない
     // 削除したあとのフォーカス：前の明細の商品、無ければ最初の明細の商品
     (prev || $('shLines').firstElementChild).querySelector('.slProd').focus();
     setTimeout(clearGoneNotice, 0);
