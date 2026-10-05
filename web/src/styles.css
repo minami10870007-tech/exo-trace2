@@ -867,3 +867,4 @@ select { max-width: 100%; }
 .contact-form .f-date { grid-column: 1 / -1; }
 .contact-form .btn, .contact-form .span-all { grid-column: 1 / -1; }
 @media (min-width: 768px) { .contact-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; } .contact-form .f-date { grid-column: auto; } .contact-form .btn { grid-column: auto; } }
+.inplace-alert { margin: 0; }

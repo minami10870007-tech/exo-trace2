@@ -41,7 +41,8 @@ const nw = (v) => `<span class="nowrap">${esc(v)}</span>`;
 // 電話をかけるリンク。内線は番号に含めない（つなげると別の番号にかかる）
 const telLink = (v) => (v ? `<a href="tel:${esc(String(v).split(/\s*[（(]?\s*(?:内線|ext\.?|#)/i)[0].replace(/[^0-9+]/g, ''))}">${esc(v)}</a>` : '');
 const mailLink = (v) => (v ? `<a href="mailto:${esc(v)}">${esc(v)}</a>` : '');
-const joinNw = (arr, sep) => arr.filter((v) => v !== '' && v !== null && v !== undefined).map(nw).join(sep || '・');
+// 区切り（・）は前の項目に付ける：折り返したとき、行頭に「・」が来ないように
+const joinNw = (arr, sep) => { const xs = arr.filter((v) => v !== '' && v !== null && v !== undefined); return xs.map((v, i) => nw(String(v) + (i < xs.length - 1 ? sep || '・' : ''))).join(''); };
 
 function storage(read, value) {
   try {
@@ -316,6 +317,16 @@ function fieldErr(el, msg) {
   f.insertAdjacentHTML('beforeend', `<div class="field-err req-err">${esc(msg)}</div>`);
 }
 
+/** 回収案件の中（顧客・ロットの見出しの下）にエラーを出してフォーカスする。画面の上のメッセージ欄はスマホでは見えないため */
+function inPlaceAlert(container, text) {
+  if (!container) return false;
+  const old = container.querySelector(':scope > .inplace-alert'); if (old) old.remove();
+  const head = container.querySelector(':scope > .target-head') || container.firstElementChild;
+  head.insertAdjacentHTML('afterend', `<div class="alert alert-ng inplace-alert" role="alert" tabindex="-1"><div class="alert-text">${esc(text)}</div></div>`);
+  const a = container.querySelector(':scope > .inplace-alert'); a.scrollIntoView({ block: 'nearest' }); a.focus({ preventScroll: true });
+  return true;
+}
+
 /** 選べる保管場所が無いとき、欄の下に登録先への案内を出す */
 function locHint(id, text) {
   const f = $(id).closest('.field'); let h = f.querySelector('.loc-hint');
@@ -547,7 +558,7 @@ function unsavedScreens() {
   const list = [];
   if (['rcSupLot', 'rcQty', 'rcPrice', 'rcMfg'].some((id) => $(id).value.trim()) || ($('rcExp').value && $('rcExp').dataset.manual)) list.push('入荷登録');
   if ($('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim())) list.push('出荷登録');
-  if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim())) list.push('返品登録');
+  if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim() !== ($('rtReason').dataset.orig || ''))) list.push('返品登録');
   if ($('rcTitle').value.trim() || $('rcReason').value.trim() || snapshotTargetForms().some((t) => t.fields.length)) list.push('回収管理');
   if (snapshotInspect().length) list.push('受入検品');
   if ($('masterDialog').open && $('masterForm').dataset.dirty === '1') list.push('マスタ編集');
@@ -1813,7 +1824,7 @@ function selectReturnLine(btn, quiet) {
   $('rtLineInfo').innerHTML = joinNw(btn.dataset.label.split('／').concat(['返品可能 ' + btn.dataset.max]));
   $('rtQty').max = btn.dataset.max;
   $('rtQty').value = '';
-  $('rtReason').value = ''; // 前の明細・出荷の理由を引き継がない（下書きを戻すときは、このあと上書きする）
+  $('rtReason').value = $('rtReason').dataset.orig = btn.dataset.recall === '1' ? '回収対象品の返品' : ''; // 前の明細・出荷の理由を引き継がない（回収品は理由を入れておく。下書きを戻すときは、このあと上書きする）
   $('rtQtyHint').textContent = `最大 ${btn.dataset.max}`;
   $('rtDate').value = S.cfg.today;
   // 商品と同じ温度区分の保管場所だけを選べるようにする（1か所だけなら自動で選ぶ）
@@ -2194,7 +2205,8 @@ async function loadRecalls(exceptId) {
   const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
   $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}" data-key="${esc(l.product_id + ':' + l.supplier + ':' + String(l.supplier_lot_no).toUpperCase())}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
       <small>${joinNw([l.product, '仕入先ロット ' + l.supplier_lot_no, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
-  $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
+  $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('')
+    : `<div class="card">${empty('回収案件はありません', 'check')}<p class="note center">出荷したロットに品質問題が見つかったときに、上の「新しい回収案件を登録」から始めます。出荷先の顧客が自動で抽出され、連絡と回収の進み具合を記録できます。</p></div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
   restoreTargetForms(snap);
   if (S.recallJump) { // ダッシュボードの「開く」から来た：その案件へ
@@ -2377,8 +2389,8 @@ async function saveTarget(btn) {
           const labels = { cd_: '連絡日', cm_: '連絡方法', un_: '回収不能数', cr_: 'クローズ理由', st_: '状態' };
           const typed = mine.filter(([fid, v]) => v && labels[fid.replace(/\d+$/, '')]).map(([fid, v]) => `${labels[fid.replace(/\d+$/, '')]}：${v}`).join('・');
           const badge = $('tg_' + id) && $('tg_' + id).querySelector('.badge');
-          alertBox('rclMsg', `「${who0}」は、他の利用者の操作（返品登録・クローズなど）で「${badge ? badge.textContent : '更新できない状態'}」になったため、入力した内容は保存されていません。` + (typed ? `\n入力していた内容：${typed}` : ''), 'ng', true);
-          focusTo($('tg_' + id) || $('rclMsg'));
+          const msg2 = `「${who0}」は、他の利用者の操作（返品登録・クローズなど）で「${badge ? badge.textContent : '更新できない状態'}」になったため、入力した内容は保存されていません。` + (typed ? `\n入力していた内容：${typed}` : '');
+          if (!inPlaceAlert($('tg_' + id), msg2)) { alertBox('rclMsg', msg2, 'ng'); toast(msg2, 'ng'); }
           return;
         }
         const latest = [['cd_', '連絡日'], ['cm_', '連絡方法'], ['un_', '回収不能数'], ['cr_', 'クローズ理由']]
@@ -2770,10 +2782,13 @@ const ACTIONS = {
         if (/連絡日/.test(err.message) && $(gid + '_e')) { $(gid + '_e').textContent = err.message; d.setAttribute('aria-invalid', 'true'); d.focus(); return; }
         // 他の利用者の操作で状態が変わった：最新の状態を表示してから知らせる（入力途中の内容は残す）
         if (!S.sess) return;
+        const typed = [d.value && '連絡日 ' + d.value, $(gid + '_m').value && '連絡方法 ' + $(gid + '_m').value].filter(Boolean).join('・');
         const fresh = await loadRecalls().then(() => true, () => false);
-        const text = err.message + (fresh ? '\n最新の状態を表示しました。' : '');
+        const text = err.message + (fresh ? '\n最新の状態を表示しました。' : '') + (typed ? `\n入力していた内容：${typed}（保存されていません）` : '');
         if ($(gid + '_e')) { $(gid + '_e').textContent = text; focusTo($(gid)); }
-        else { alertBox('rclMsg', text, 'ng', true); focusTo($(gid) || $('rclList').querySelector(`article[data-id="${CSS.escape(el.dataset.recall)}"]`) || $('rclMsg')); }
+        else if (!inPlaceAlert($(gid), text)) { // 顧客ごと見えなくなった：上のメッセージ欄（スクロールする）とお知らせで伝える
+          alertBox('rclMsg', text, 'ng'); toast(err.message, 'ng');
+        }
       }
     });
   },

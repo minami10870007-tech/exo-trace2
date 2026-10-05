@@ -647,7 +647,7 @@ for (const vp of VIEWPORTS) {
       .catch(() => { throw new Error('「戻る」で入力途中の内容が戻らない'); });
     await page.click('[data-action="cancelReturn"]'); await page.waitForTimeout(200); if (await page.$('#dialog[open]')) await page.click('#dialogOk');
     await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
-    if (await page.inputValue('#rtReason')) throw new Error('キャンセル後も前の理由が残っている');
+    if (await page.evaluate(() => $('rtReason').value !== ($('rtReason').dataset.orig || ''))) throw new Error('キャンセル後も前の理由が残っている'); // 回収品は既定の理由が入る
     // 一部だけ返品して登録 → フォームは閉じ、未保存扱いにならない
     await page.fill('#rtQty', '1'); await page.fill('#rtReason', 'テスト返品');
     if (!(await page.inputValue('#rtDisp')) && !(await page.isDisabled('#rtDisp'))) await page.selectOption('#rtDisp', 'DISPOSE');
