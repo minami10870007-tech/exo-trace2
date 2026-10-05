@@ -1083,7 +1083,7 @@ begin
   return jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning);
 end $$;
 
-/** ロットステータス変更（受入検品 P-02 と QA によるステータス変更 P-15）。p = { lotId, to, reason, coaConfirmed } */
+/** ロットステータス変更（受入検品 P-02 と QA によるステータス変更 P-15）。p = { lotId, to, reason, coaConfirmed, expectedStatus } */
 create or replace function public.change_lot_status(p jsonb default '{}') returns jsonb
 language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -1096,6 +1096,11 @@ begin
   perform exo.write_lock();
   select * into v_lot from exo.t_lot where id = exo.j_id(p, 'lotId') for update;
   if v_lot.id is null then perform exo.fail('ロットが見つかりません。画面を再読込してください。'); end if;
+  -- 画面を開いた後に他の利用者が状態を変えていたら、古い画面のまま判定させない
+  if exo.j_text(p, 'expectedStatus') is not null and exo.j_text(p, 'expectedStatus') <> v_lot.status then
+    perform exo.fail('このロットは他の利用者により「' || exo.code_label('lot_status', v_lot.status) || '」に変更されています' ||
+      coalesce('（理由：' || v_lot.status_reason || '）', '') || '。最新の状態を表示しました。内容を確認してから判定してください。');
+  end if;
   if v_to is null or not coalesce(v_allowed -> v_lot.status ? v_to, false) then
     perform exo.fail('現在のステータス（' || exo.code_label('lot_status', v_lot.status) || '）から「' ||
       coalesce(exo.code_label('lot_status', v_to), '') || '」には変更できません。');

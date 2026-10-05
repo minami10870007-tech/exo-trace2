@@ -143,7 +143,7 @@ async function ensureSession(sentToken) {
   if (!S.sess) throw new Error(MSG_EXPIRED);
   if (sentToken ? S.sess.access_token !== sentToken : S.sess.expires_at >= nowSec() + 60) return; // 更新不要・別の呼び出しで更新済み
   if (!(await refreshSession())) {
-    if (S.sess) logout(MSG_EXPIRED);
+    if (S.sess) logout(MSG_EXPIRED_KEEP, true);
     throw new Error(MSG_EXPIRED);
   }
 }
@@ -174,7 +174,7 @@ async function api(fn, ...args) {
       await ensureSession(sent);
       ({ res, data } = await sbFetch(path, { p }, S.sess.access_token));
     }
-    if (res.status === 401) { logout(MSG_EXPIRED); throw new Error(MSG_EXPIRED); }
+    if (res.status === 401) { logout(MSG_EXPIRED_KEEP, true); throw new Error(MSG_EXPIRED); }
     // 利用者登録が無い・停止された（データベース関数 exo.require_user のエラー）→ ログアウト
     if (res.status === 403 && /利用権限|ログインしてください/.test(data.message || '')) { logout(data.message); throw new Error(data.message); }
     if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
@@ -379,15 +379,17 @@ function endLocal(message) {
   showLogin(message);
 }
 
-function logout(message) {
+/** expired=true：有効期限切れ。入力中の内容と開いていた画面はそのまま残し、同じ人が再ログインしたら続きから使えるようにする */
+function logout(message, expired) {
   const sess = S.sess;
   S.sess = null;
   storage(false, S.user ? { user: S.user } : null); // 次回ログイン用にメールアドレスだけ残す
   // サーバー側のセッションも無効化（失敗しても画面はログアウトする）
   if (sess && S.sb) sbFetch('/auth/v1/logout?scope=local', undefined, sess.access_token).catch(() => {});
-  clearScreens();
+  if (!expired) clearScreens();
   showLogin(typeof message === 'string' ? message : '');
 }
+const MSG_EXPIRED_KEEP = 'ログインの有効期限が切れました。直前の操作は保存されていません。\nもう一度ログインすると、入力中の内容のまま元の画面に戻ります。';
 
 /** 前の利用者の入力内容・表示結果を消す（共用端末で別の人がログインする場合に備える） */
 function clearScreens() {
@@ -448,7 +450,7 @@ async function boot() {
   $('whoSheet').textContent = S.user;
   try {
     await reloadMasters();
-    ['rcDate', 'shDate'].forEach((id) => { $(id).value = S.cfg.today; });
+    ['rcDate', 'shDate'].forEach((id) => { if (!$(id).value) $(id).value = S.cfg.today; });
     if (!$('shLines').children.length) addLine();
     route();
     // 初めてログインした人には、ステップ形式のガイドを自動で表示する
@@ -553,12 +555,15 @@ function closeSheet() {
 async function reloadMasters() {
   S.M = await api('getMasters');
   const prod = active(S.M.products);
+  const keep = Object.fromEntries(['rcSupplier', 'rcProduct', 'shCustomer', 'tcCustomer', 'rcLoc'].map((id) => [id, $(id).value]));
   $('rcSupplier').innerHTML = options(active(S.M.suppliers), 'id', (r) => r.supplier_code + '　' + r.name, '選択してください');
   $('rcProduct').innerHTML = options(prod, 'id', (r) => r.product_code + '　' + r.name, '選択してください');
   $('shCustomer').innerHTML = options(active(S.M.customers), 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   $('tcCustomer').innerHTML = options(S.M.customers, 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
+  ['rcSupplier', 'rcProduct', 'shCustomer', 'tcCustomer'].forEach((id) => { if (keep[id]) $(id).value = keep[id]; });
   ['rcSupplier', 'rcProduct', 'shCustomer'].forEach((id) => { const o = $(id).options; if (o.length === 2 && !$(id).value) $(id).value = o[1].value; });
   fillReceiptLocations();
+  if (keep.rcLoc && [...$('rcLoc').options].some((o) => o.value === keep.rcLoc)) $('rcLoc').value = keep.rcLoc;
   updateCustHint();
   renderPrereq();
   document.querySelectorAll('.slProd').forEach((sel) => {
@@ -907,7 +912,7 @@ async function loadInspect(exceptId) {
   $('insBody').innerHTML = lots.length ? lots.map((l) => {
     const nexts = NEXT[l.status] || [];
     const action = nexts.length ? `<div class="lot-action">
-        <div class="field"><label for="to_${l.id}">判定</label><select id="to_${l.id}" class="insTo" data-id="${l.id}"><option value="">選択してください</option>${nexts.map((s) => `<option value="${s}">${esc(code('lot_status', s))}</option>`).join('')}</select></div>
+        <div class="field"><label for="to_${l.id}">判定</label><select id="to_${l.id}" class="insTo" data-id="${l.id}" data-status="${esc(l.status)}"><option value="">選択してください</option>${nexts.map((s) => `<option value="${s}">${esc(code('lot_status', s))}</option>`).join('')}</select></div>
         <div class="field"><label for="rs_${l.id}">理由 <span class="opt" id="rso_${l.id}">合格時は任意</span></label><input id="rs_${l.id}" class="insReason" data-id="${l.id}" autocomplete="off"></div>
         <label class="check" id="coaw_${l.id}" hidden><input type="checkbox" id="coa_${l.id}" class="insCoa" data-id="${l.id}"><span>COA（試験成績書）を確認した</span></label>
         <div class="field-hint" id="insHint_${l.id}">判定を選択してください。</div>
@@ -953,13 +958,15 @@ async function changeStatus(btn) {
   await busy(btn, async () => {
     alertBox('insMsg', '');
     try {
-      const r = await api('changeLotStatus', { lotId: id, to: $('to_' + id).value, reason: $('rs_' + id).value, coaConfirmed: $('coa_' + id).checked });
+      const r = await api('changeLotStatus', { lotId: id, to: $('to_' + id).value, reason: $('rs_' + id).value, coaConfirmed: $('coa_' + id).checked,
+        expectedStatus: $('to_' + id).dataset.status });
       guideAfterAction();
       await loadInspect(id);
       alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。`, 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ') : '');
     } catch (err) {
+      // 他の利用者の変更などで状態が変わっている可能性があるので、最新の一覧に描き直す（入力中の内容は残す）
+      await loadInspect().catch(() => {});
       alertBox('insMsg', err.message, 'ng');
-      $('insMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   });
 }
@@ -992,6 +999,15 @@ async function submitShipment(e) {
   });
   if (!lines.some((l) => l.productId) && lineEls[0]) extra.unshift(lineEls[0].querySelector('.slProd'));
   if (!checkRequired($('shipForm'), 'shMsg', extra)) return;
+  // 数量は1以上の整数
+  const badQty = lineEls.find((l) => l.querySelector('.slProd').value && !(Number.isInteger(Number(l.querySelector('.slQty').value)) && Number(l.querySelector('.slQty').value) >= 1));
+  if (badQty) {
+    const el = badQty.querySelector('.slQty');
+    el.setAttribute('aria-invalid', 'true');
+    alertBox('shMsg', '数量は1以上の整数で入力してください。', 'ng', true);
+    el.focus();
+    return;
+  }
   // 販売可否ルール（確認ダイアログの前に止める）
   const ng = lineEls.find((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value));
   if (ng) {
@@ -1038,6 +1054,7 @@ async function submitShipment(e) {
       await loadShipmentPage();
     } catch (err) {
       alertBox('shMsg', err.message, 'ng');
+      loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach(updateLineAvail)).catch(() => {}); // 引当可能数を最新に
     }
   });
 }
@@ -1235,6 +1252,10 @@ async function submitReturn(e) {
       focusTo($('rtFindMsg').firstElementChild);
     } catch (err) {
       alertBox('rtMsg', err.message, 'ng');
+      if (/取消|返品可能数/.test(err.message)) { // 他の利用者の操作で出荷の状態が変わっている
+        await findShipmentForReturn(null, true);
+        alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng');
+      }
     }
   });
 }
@@ -1430,7 +1451,8 @@ const RECALL_STATUS = { OPEN: '登録', IN_PROGRESS: '対応中', CLOSED: '完�
 
 async function loadRecalls() {
   const [lots, recalls] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
-  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}"><span><b class="mono">${esc(l.lot_no)}</b>
+  const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
+  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
       <small>${joinNw([l.product, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
   $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
@@ -1465,7 +1487,7 @@ function renderRecall(r) {
     const contacts = [t.contact_name ? esc(t.contact_name) : '', telLink(t.phone), mailLink(t.email)].filter(Boolean);
     return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
         <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? '対応済（一部回収不能）' : t.statusLabel)}</div>
-      <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span></div>
+      <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '・' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
       ${form}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
@@ -1739,7 +1761,7 @@ async function saveRule(chk, isUndo) {
 // イベント
 // ======================================================================
 const ACTIONS = {
-  go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
+  go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
   openSheet, closeSheet,
   logout: () => logout(''),
   retry,
@@ -1912,7 +1934,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('hashchange', () => { if (S.sess && !$('app').hidden) route(); });
   // 返品の入力途中でページを閉じる・再読み込みするときは確認する
   window.addEventListener('beforeunload', (e) => {
-    if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim())) { e.preventDefault(); e.returnValue = ''; }
+    if (!S.sess || $('app').hidden) return;
+    const receipt = ['rcSupLot', 'rcQty', 'rcPrice'].some((id) => $(id).value.trim());
+    const ship = $('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim());
+    const ret = !$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim());
+    if (receipt || ship || ret) { e.preventDefault(); e.returnValue = ''; }
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshToday(); });
   window.addEventListener('focus', refreshToday);

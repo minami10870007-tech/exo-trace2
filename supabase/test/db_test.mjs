@@ -228,6 +228,7 @@ try {
 
   // ---------------- 状態遷移 ----------------
   await throwsMsg(G.change_lot_status({ lotId: lot1.id, to: 'RELEASED', coaConfirmed: true }), /変更できません/, 'RECALLED からは変更不可');
+  await throwsMsg(G.change_lot_status({ lotId: lot2.id, to: 'HOLD', reason: 'x', expectedStatus: 'QUARANTINE' }), /他の利用者により「合格」/, '古い画面からの判定は拒否');
   await G.change_lot_status({ lotId: lot2.id, to: 'HOLD', reason: '温度確認' });
   await throwsMsg(G.change_lot_status({ lotId: lot2.id, to: 'QUARANTINE', reason: 'x' }), /検品済/, '検品済は検品待ちに戻せない');
   await G.change_lot_status({ lotId: lot2.id, to: 'RELEASED', reason: '問題なし', coaConfirmed: true });

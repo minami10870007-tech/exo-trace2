@@ -381,6 +381,7 @@ for (const vp of VIEWPORTS) {
     await page.goBack(); await page.waitForFunction(() => !document.getElementById('dialog').open);
     await page.waitForTimeout(500);
     if (Number(psql(server.sb.db, 'select count(*) from exo.t_shipment')) !== n) throw new Error('出荷が登録された');
+    await page.click('#bottomNav [data-page="shipment"]'); await idle(page); await page.fill('.slQty', ''); // 後のテストの再読み込みで「離れますか？」を出さないため
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
@@ -411,6 +412,21 @@ for (const vp of VIEWPORTS) {
     await page.click('[data-action="reload"]'); await waitText('#toasts', /更新しました/);
     if (server.sb.stats.refresh !== before + 1) throw new Error('更新回数 ' + (server.sb.stats.refresh - before) + '（同時に複数回更新していないか）');
     if (await page.$('#login:not([hidden])')) throw new Error('ログアウトされた');
+  });
+  await step('ログイン期限切れ：入力中の内容を残したまま、再ログインで元の画面へ', async () => {
+    await page.click('#bottomNav [data-page="receipt"]'); await idle(page);
+    await page.fill('#rcSupLot', 'KEEP-ME');
+    // eslint-disable-next-line no-undef
+    await page.evaluate(() => {
+      S.sess.expires_at = Math.floor(Date.now() / 1000) - 10; S.sess.refresh_token = 'revoked';
+      localStorage.setItem('exo-trace-auth', JSON.stringify(S.sess)); // 他のタブにも有効なセッションが無い状態
+    });
+    await page.click('[data-action="reload"]'); await page.waitForSelector('#login:not([hidden])');
+    if (!/元の画面に戻ります/.test(await page.textContent('#loginMsg'))) throw new Error(await page.textContent('#loginMsg'));
+    await page.fill('#loginPassword', DEMO_USER.password); await page.click('#loginForm button[type="submit"]');
+    await page.waitForSelector('#app:not([hidden])'); await idle(page);
+    if (!(await page.isVisible('#page-receipt')) || (await page.inputValue('#rcSupLot')) !== 'KEEP-ME') throw new Error('入力または画面が戻らない');
+    await page.fill('#rcSupLot', '');
   });
   await step('更新できないセッションはログイン画面へ', async () => {
     await page.evaluate(() => {
