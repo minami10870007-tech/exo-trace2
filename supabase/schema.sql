@@ -1547,7 +1547,7 @@ begin
   perform exo.write_lock();
   select * into v_recall from exo.t_recall where id = exo.j_id(p, 'recallId');
   if v_recall.id is null then perform exo.fail('回収案件が見つかりません。画面を再読込してください。'); end if;
-  if v_recall.status = 'CLOSED' then perform exo.fail('完了した回収案件です。'); end if;
+  if v_recall.status = 'CLOSED' then perform exo.fail('この回収案件は既に完了しています（他の利用者が完了した可能性があります）。'); end if;
   perform exo.extract_targets(v_recall.id);
   return exo.recall_view(v_recall.id);
 end $$;
@@ -1572,7 +1572,7 @@ begin
     perform exo.fail('この顧客の回収状況は、他の利用者または返品登録で更新されています。最新の状態を表示しました。入力した内容を確認して、もう一度保存してください。');
   end if;
   select status into v_recall_status from exo.t_recall where id = v_t.recall_id;
-  if v_recall_status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません。'); end if;
+  if v_recall_status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません（他の利用者が完了した可能性があります）。'); end if;
   if p ? 'contactedOn' then
     v_contacted := exo.to_date(exo.j_text(p, 'contactedOn'));
     if exo.j_text(p, 'contactedOn') is not null and (v_contacted is null or v_contacted > exo.today()

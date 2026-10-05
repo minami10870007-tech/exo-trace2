@@ -215,7 +215,7 @@ try {
   ok(dash.recalls.length === 1 && dash.recalls[0].recall_no === 'RCL-2026-001', 'ダッシュボード：対応中の回収');
   const closed = await G.close_recall({ recallId: rc.id });
   ok(closed.status === 'CLOSED' && closed.closed_on === '2026-10-04' && /未処分の在庫/.test(closed.warning), '回収完了（残在庫の警告）');
-  await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CONTACTED' }), /完了した回収案件/, '完了後は更新不可');
+  await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CONTACTED' }), /完了した回収案件は更新できません/, '完了後は更新不可');
   // 同じロットの2回目の回収：前回回収済みの数量は対象にしない
   const rc2 = await G.create_recall({ title: '再回収', reason: '追加調査', severity: 'III', lotIds: [lot1.id] });
   const tB3 = rc2.targets.find((t) => t.customer === 'サロンB');

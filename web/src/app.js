@@ -293,6 +293,7 @@ function toast(text, kind, action) {
   placeToasts();
   const el = document.createElement('div');
   el.className = 'toast' + (kind === 'ng' ? ' toast-ng' : kind === 'warn' ? ' toast-warn' : '');
+  if (kind === 'ng') el.setAttribute('role', 'alert'); // エラーはすぐに読み上げる（フォーカス移動で読み上げが途切れないように）
   const span = document.createElement('span');
   span.textContent = userText(text);
   el.appendChild(span);
@@ -895,7 +896,9 @@ function openGuide(step) {
   closeSheet();
   renderGuide();
   if (!$('guideDialog').open) $('guideDialog').showModal();
-  $('guideNext').focus();
+  // まだ済んでいないステップでは「…の画面を開く」が主な操作なので、そこにフォーカスする（Enter で手順を飛ばさないように）
+  const go = $('guideGo');
+  (!go.hidden && go.classList.contains('btn-primary') ? go : $('guideNext')).focus();
 }
 
 function closeGuide() {
@@ -1462,8 +1465,13 @@ async function cancelShip(btn) {
       await loadShipmentPage();
       focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent')); // 取消した出荷の行へ
     } catch (err) { // 他の利用者が先に取消・返品した等：最新の一覧に描き直して、その行へ
-      toast(err.message + '（最新の状態を表示しました）', 'ng');
-      await loadShipmentPage().catch(() => {});
+      if (!S.sess) return; // ログアウトした（期限切れ）：ログイン画面が説明している
+      const fresh = await loadShipmentPage().then(() => true, () => false);
+      if (fresh && /取消され/.test(err.message)) { // 上部の「出荷を確定しました」がこの出荷なら、取消済みと分かるように
+        const done = $('shDone').firstElementChild;
+        if (done && done.dataset.no === btn.dataset.no) alertBox('shDone', `出荷 ${btn.dataset.no} は取消済みです（他の利用者が取消しました）。`, 'warn', true);
+      }
+      toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
       focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent'));
     }
   });
@@ -2155,8 +2163,9 @@ async function saveTarget(btn) {
 
 /** 回収案件の操作が失敗したとき（他の利用者が先に完了した等）：最新の状態に描き直して、その案件へ */
 async function recallFailed(err, id) {
-  toast(err.message + '（最新の状態を表示しました）', 'ng');
-  await loadRecalls().catch(() => {});
+  if (!S.sess) return; // ログアウトした（期限切れ）：ログイン画面が説明している
+  const fresh = await loadRecalls().then(() => true, () => false);
+  toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
   focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`) || $('rclList'));
 }
 
