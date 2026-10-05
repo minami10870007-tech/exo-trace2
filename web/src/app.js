@@ -168,7 +168,7 @@ function rpcError(res, data) {
 // フォームの内容を変えるまでは同じ依頼番号（requestId）を送る（サーバーは同じ番号なら前回の結果を返す）
 const WRITE_FORM = { createShipment: 'shipForm', registerReceipt: 'receiptForm', registerReturn: 'rtForm', disposeStock: 'disposeForm', createRecall: 'recallForm',
   saveMaster: 'masterForm', updateRecallTarget: (p) => 'tg_' + p.targetId, changeLotStatus: (p) => 'lot_' + p.lotId,
-  cancelShipment: (p) => 'cs_' + p.shipmentId, closeRecall: (p) => 'cr_' + p.recallId };
+  cancelShipment: (p) => 'cs_' + p.shipmentId, closeRecall: (p) => 'cr_' + p.recallId, recordRecallContact: (p) => `cg_${p.recallId}_${p.customerId}` };
 const MSG_UNSURE = '通信が途切れたため、登録できたか確認できませんでした。入力内容はそのままで、もう一度同じ操作をしてください（二重に登録されることはありません。登録済みなら、その結果を表示します）。';
 /** 確認できないまま閉じようとしている入力ダイアログか（「保存されません」とは言えない） */
 const unsureDialog = (id) => (id === 'masterDialog' && !!S.unsure.masterForm) || (id === 'disposeDialog' && !!S.unsure.disposeForm);
@@ -191,6 +191,7 @@ function resetScopeOf(el) {
   const reset = (sc) => { if (S.unsure[sc]) S.changed[sc] = true; else resetRequest(sc); };
   const fm = el.closest('form'); if (fm && fm.id) reset(fm.id);
   const tg = el.closest('.target'); if (tg && tg.id) reset(tg.id);
+  const cg = !tg && el.closest('.cust-group'); if (cg && cg.id) reset(cg.id);
   if (el.dataset && el.dataset.id && /^(to|rs|coa)_/.test(el.id)) reset('lot_' + el.dataset.id);
 }
 /** 前回の確定が「登録できたか分からない」まま、内容を変えずに再送しようとしているか */
@@ -1589,11 +1590,14 @@ async function loadRecentShipments() {
     list.map((s) => ({ attrs: ` data-no="${esc(s.shipment_no)}"`, cells: [html(mono(s.shipment_no)), s.shipped_on, s.customer,
       html(s.lines.map((l) => `<div class="li"><span>${esc(l.product)}</span><span class="li-sub"><span class="mono">${esc(l.lot_no)}</span> × ${l.quantity}${l.returned ? `（返品 ${l.returned}）` : ''}</span></div>`).join('')),
       num(s.amount), html(s.status === 'SHIPPED' ? badge('ok', '出荷済') : badge('ng', '取消')),
-      s.status === 'SHIPPED' ? html(`<button type="button" class="btn btn-danger-text btn-sm" data-action="cancelShip" data-id="${s.id}" data-no="${esc(s.shipment_no)}">出荷を取消</button>`) : ''] })),
+      // 返品がある出荷は取消できないので、ボタンを出さない。回収中のロットを含む出荷は、取消の前に注意する
+      s.status !== 'SHIPPED' ? '' : s.lines.some((l) => Number(l.returned) > 0) ? html('<span class="card-sub">返品あり（取消不可）</span>')
+        : html(`<button type="button" class="btn btn-danger-text btn-sm" data-action="cancelShip" data-id="${s.id}" data-no="${esc(s.shipment_no)}"${s.lines.some((l) => l.in_open_recall) ? ' data-recall="1"' : ''}>出荷を取消</button>`)] })),
     { empty: 'まだ出荷はありません', emptyIcon: 'truck' });
 }
 
 async function cancelShip(btn) {
+  if (btn.dataset.recall && !(await ask({ title: '回収中のロットを含む出荷です', body: `出荷 ${btn.dataset.no} には回収中のロットが含まれます。取消すと、この顧客は回収対象から外れます。\n商品が顧客に届いている場合は、取消ではなく「返品登録」で回収品として受け入れてください。`, okText: '誤出荷なので取消す', danger: true }))) return;
   const reason = await ask({ title: `出荷 ${btn.dataset.no} を取消しますか？`, body: '在庫に戻ります。返品が登録されている出荷は取消できません。', input: '取消理由', value: (S.cancelReason || {})[btn.dataset.no] || '', okText: '取消する', danger: true });
   if (reason) (S.cancelReason = S.cancelReason || {})[btn.dataset.no] = reason; // 通信が途切れてやり直すとき、理由を打ち直さずに済むように
   if (!reason) return;
@@ -2202,23 +2206,22 @@ async function loadRecalls(exceptId) {
 
 function recallTotals(r) {
   const act = r.targets.filter((t) => Number(t.shipped_qty) > 0);
-  r.activeTargets = act.length;
+  r.activeTargets = new Set(act.map((t) => t.customer_id)).size; // 顧客単位（同じ顧客の複数ロットは1件）
   r.shippedQty = act.reduce((a, t) => a + Number(t.shipped_qty), 0);
   r.recQty = act.reduce((a, t) => a + Math.min(Number(t.shipped_qty), Number(t.recovered_qty)), 0);
   r.unrecQty = act.reduce((a, t) => a + Number(t.unrecoverable_qty), 0);
   r.doneQty = act.reduce((a, t) => a + Math.min(Number(t.shipped_qty), Number(t.recovered_qty) + Number(t.unrecoverable_qty)), 0);
-  r.openTargets = r.targets.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED').length;
-  r.uncontacted = r.targets.filter((t) => t.status === 'NOT_CONTACTED').length;
+  r.openTargets = new Set(r.targets.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED').map((t) => t.customer_id)).size;
+  r.uncontacted = new Set(r.targets.filter((t) => t.status === 'NOT_CONTACTED').map((t) => t.customer_id)).size;
   return r;
 }
 
 function renderRecall(r) {
   recallTotals(r);
   const ed = r.status !== 'CLOSED';
-  const targets = r.targets.length ? r.targets.map((t) => {
+  const lotBlock = (t) => {
     const editable = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED';
-    const open = t.status === 'NOT_CONTACTED';
-    const form = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED' ? `<details class="target-edit"${open ? ' open' : ''}><summary>進捗を更新</summary><div class="target-grid">
+    const form = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED' ? `<details class="target-edit"><summary>このロットの進捗を更新（回収不能・クローズなど）</summary><div class="target-grid">
         <div class="field f-date"><label for="cd_${t.id}">連絡日</label><input type="date" id="cd_${t.id}" value="${esc(t.contacted_on)}" data-orig="${esc(t.contacted_on)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
         <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}" data-orig="${esc(t.contact_method)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}" data-orig="${esc(t.unrecoverable_qty)}"></div>
@@ -2226,15 +2229,31 @@ function renderRecall(r) {
         <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" data-orig="${esc(t.close_reason)}" autocomplete="off" maxlength="500" aria-describedby="cre_${t.id}"><div class="field-err" id="cre_${t.id}" role="alert"></div></div>
         <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}" data-ver="${esc(t.updated_at)}">保存</button>
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
-    const contacts = [t.contact_name ? esc(t.contact_name) : '', telLink(t.phone), mailLink(t.email)].filter(Boolean);
-    return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
-        <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? (Number(t.recovered_qty) > 0 ? '対応済（一部回収不能）' : '対応済（回収不能）') : t.statusLabel)}</div>
-      <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '・' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
+    return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t"><span class="sr-only">${esc(t.customer)}・</span>ロット <b class="mono">${esc(t.lot_no)}</b></div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? (Number(t.recovered_qty) > 0 ? '対応済（一部回収不能）' : '対応済（回収不能）') : t.statusLabel)}</div>
+      <div class="target-nums"><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '・' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
       ${form}</div>`;
+  };
+  // 顧客ごとにまとめる：連絡（連絡日・方法）は顧客に1回記録すれば、その顧客の対象ロットすべてに反映する
+  const groups = new Map();
+  r.targets.forEach((t) => { if (!groups.has(t.customer_id)) groups.set(t.customer_id, []); groups.get(t.customer_id).push(t); });
+  const targets = groups.size ? [...groups.values()].map((ts) => {
+    const t0 = ts[0], openTs = ts.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED');
+    const contacts = [t0.contact_name ? esc(t0.contact_name) : '', telLink(t0.phone), mailLink(t0.email)].filter(Boolean);
+    const last = ts.filter((t) => t.contacted_on).sort((a, b) => String(b.contacted_on).localeCompare(String(a.contacted_on)))[0];
+    const st = !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
+    const gid = `cg_${r.id}_${t0.customer_id}`;
+    const contactForm = ed && openTs.length ? `<div class="contact-form"><div class="field f-date"><label for="${gid}_d">連絡日</label><input type="date" id="${gid}_d" value="${esc(last ? last.contacted_on : '')}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
+        <div class="field"><label for="${gid}_m">連絡方法</label><select id="${gid}_m">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${last && m === last.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
+        <button type="button" class="btn btn-primary" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}">連絡を記録</button>
+        <div class="field-err span-all" id="${gid}_e" role="alert"></div></div>` : '';
+    return `<div class="cust-group" id="${gid}"><div class="target-head"><div><div class="t">${esc(t0.customer)}${ts.length > 1 ? `<span class="card-sub">（対象ロット ${ts.length}）</span>` : ''}</div>
+        <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div>
+        ${last ? `<div class="s">連絡 ${esc(last.contacted_on)}${last.contact_method ? '・' + esc(last.contact_method) : ''}</div>` : ''}</div>${badge(st[0], st[1])}</div>
+      ${contactForm}${ts.map(lotBlock).join('')}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
   return `<article class="card" data-id="${r.id}"><div class="card-head"><div><span class="eyebrow">${esc(r.recall_no)}</span><h2 class="card-title">${esc(r.title)}</h2>
-      <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : ''])}<br>対象ロット <span class="lot-list">${r.lots.map(nw).join('、')}</span></p></div>
+      <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : ''])}<br>対象ロット <span class="lot-list">${r.lots.map((l, i) => nw(l + (i < r.lots.length - 1 ? '、' : ''))).join('')}</span></p></div>
       ${badge(r.status, RECALL_STATUS[r.status] || r.status)}</div>
     <p class="note">${esc(r.reason)}</p>
     <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recQty >= r.shippedQty ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>
@@ -2265,7 +2284,7 @@ async function submitRecall(e) {
   await busy(e.submitter, async () => {
     try {
       const r = await api('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds });
-      const nTargets = r.targets.filter((t) => Number(t.shipped_qty) > 0).length;
+      const nTargets = new Set(r.targets.filter((t) => Number(t.shipped_qty) > 0).map((t) => t.customer_id)).size; // 顧客単位
       const added = (r.lots || []).length - lotIds.length; // 同じ仕入先ロットの分納分（サーバーが自動で含めた）
       const createdMsg = (nTargets ? `回収案件 ${r.recall_no} を登録しました（対象顧客 ${nTargets} 件）。対象顧客に連絡し、進捗を記録してください。`
         : `回収案件 ${r.recall_no} を登録しました。出荷先の顧客はいません（対象顧客 0 件）。社内の在庫を処分してから、回収を完了してください。`)
@@ -2724,6 +2743,24 @@ const ACTIONS = {
     $('invFilter').value = S.invScope ? '' : el.dataset.q || '';
     $('invAvail').checked = false;
     go('inventory');
+  },
+  saveContact: async (el) => {
+    const gid = `cg_${el.dataset.recall}_${el.dataset.customer}`, d = $(gid + '_d');
+    $(gid + '_e').textContent = '';
+    if (!d.value) { d.setAttribute('aria-invalid', 'true'); $(gid + '_e').textContent = '連絡日を入力してください。'; d.focus(); return; }
+    await busy(el, async () => {
+      try {
+        await api('recordRecallContact', { recallId: el.dataset.recall, customerId: el.dataset.customer, contactedOn: d.value, contactMethod: $(gid + '_m').value });
+        const who = $(gid).querySelector('.t').firstChild.textContent;
+        toast(`「${who}」への連絡を記録しました`);
+        await loadRecalls();
+        focusTo($(gid) || $('rclList'));
+      } catch (err) {
+        if (!$(gid + '_e')) { toast(err.message, 'ng'); return; }
+        $(gid + '_e').textContent = err.message;
+        if (/連絡日/.test(err.message)) { d.setAttribute('aria-invalid', 'true'); d.focus(); }
+      }
+    });
   },
   openRecall: (el) => { S.recallJump = el.dataset.id; go('recall'); }, // 選んだ回収案件まで移動して開く
   retrace: () => $('tlSearch').requestSubmit(),

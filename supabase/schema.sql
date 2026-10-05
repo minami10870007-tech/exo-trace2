@@ -637,8 +637,10 @@ language sql stable set search_path = '' as $$
         'customer', t.customer, 'customer_code', t.customer_code, 'contact_name', t.contact_name, 'phone', t.phone,
         'email', t.email, 'lot_no', t.lot_no, 'statusLabel', exo.code_label('target_status', t.status)) order by t.id) from t), '[]'::jsonb),
     'contactedRate', case when (select count(*) from act) = 0 then 100
-      -- 実際に連絡が取れた顧客の割合（連絡せずにクローズした顧客は含めない）
-      else round(100.0 * (select count(*) from act where status in ('CONTACTED', 'RECOVERED') or contacted_on is not null) / (select count(*) from act)) end,
+      -- 実際に連絡が取れた顧客の割合（顧客単位。同じ顧客の複数ロットは1件。連絡せずにクローズした顧客は含めない）
+      else round(100.0 * (select count(*) from (select customer_id from act group by customer_id
+                                                  having bool_or(status in ('CONTACTED', 'RECOVERED') or contacted_on is not null)) x)
+                 / (select count(distinct customer_id) from act)) end,
     'recoveredRate', case when coalesce((select sum(shipped_qty) from act), 0) = 0 then 100
       else round(100.0 * (select sum(least(shipped_qty, recovered_qty)) from act) / (select sum(shipped_qty) from act)) end,  -- 実際に回収できた割合（回収不能は含めない）
     'remainingStock', coalesce((select sum(i.on_hand_qty) from exo.t_recall_lot rl join exo.t_inventory i on i.lot_id = rl.lot_id
@@ -676,9 +678,9 @@ begin
       insert into exo.t_recall_target (recall_id, customer_id, lot_id, shipped_qty, status, close_reason)
       values (p_recall_id, rec.customer_id, rec.lot_id, rec.qty,
         case when rec.qty > 0 then 'NOT_CONTACTED' else 'CLOSED' end,
-        case when rec.qty > 0 then null else '自動：出荷正味0' end);
+        case when rec.qty > 0 then null else '出荷の取消・返品により対象外（自動）' end);
     elsif rec.qty = 0 and rec.recovered_qty = 0 and rec.status <> 'CLOSED' then
-      update exo.t_recall_target set shipped_qty = 0, unrecoverable_qty = 0, status = 'CLOSED', close_reason = '自動：出荷正味0', updated_at = now()
+      update exo.t_recall_target set shipped_qty = 0, unrecoverable_qty = 0, status = 'CLOSED', close_reason = '出荷の取消・返品により対象外（自動）', updated_at = now()
       where id = rec.target_id;
     else
       update exo.t_recall_target set shipped_qty = rec.qty,
@@ -762,7 +764,7 @@ begin
              'get_lots', 'get_inventory', 'get_recent_shipments', 'get_shipment_by_no', 'save_master', 'save_sales_rule',
              'register_receipt', 'change_lot_status', 'create_shipment', 'cancel_shipment', 'register_return', 'trace_lot',
              'trace_customer', 'create_recall', 'list_recalls', 'reextract_recall', 'update_recall_target', 'close_recall',
-             'get_setup', 'save_user_prefs', 'dispose_stock'])
+             'get_setup', 'save_user_prefs', 'dispose_stock', 'record_recall_contact'])
   loop
     execute 'drop function ' || f;
   end loop;
@@ -1732,6 +1734,32 @@ begin
   return exo.idem_put(p, 'update_recall_target', exo.recall_view(v_t.recall_id));
 end $$;
 
+/** 回収：顧客への連絡を記録する（その顧客の対象ロットすべて。1回の電話を複数ロットに分けて記録しなくてよいように）
+ *  p = { recallId, customerId, contactedOn, contactMethod, requestId } */
+create or replace function public.record_recall_contact(p jsonb default '{}') returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_r exo.t_recall;
+  v_on date := exo.to_date(exo.j_text(p, 'contactedOn'));
+  v_n integer;
+begin
+  perform exo.require_user();
+  perform exo.write_lock();
+  if exo.idem_get(p, 'record_recall_contact') is not null then return exo.idem_get(p, 'record_recall_contact'); end if;
+  select * into v_r from exo.t_recall where id = exo.j_id(p, 'recallId') for update;
+  if v_r.id is null then perform exo.fail('回収案件が見つかりません。画面を再読込してください。'); end if;
+  if v_r.status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません（他の利用者が完了した可能性があります）。'); end if;
+  if v_on is null then perform exo.fail('連絡日を入力してください。'); end if;
+  if v_on > exo.today() or v_on < v_r.started_on then perform exo.fail('連絡日は回収開始日以降、当日以前の日付を入力してください。'); end if;
+  update exo.t_recall_target set contacted_on = v_on,
+      contact_method = coalesce(left(exo.j_text(p, 'contactMethod'), 50), contact_method),
+      status = case when status = 'NOT_CONTACTED' then 'CONTACTED' else status end, updated_at = now()
+  where recall_id = v_r.id and customer_id = exo.j_id(p, 'customerId') and status not in ('RECOVERED', 'CLOSED');
+  get diagnostics v_n = row_count;
+  if v_n = 0 then perform exo.fail('この顧客の対象ロットは、すべて対応済みです（他の利用者または返品登録で更新された可能性があります）。'); end if;
+  return exo.idem_put(p, 'record_recall_contact', exo.recall_view(v_r.id));
+end $$;
+
 /** p = { recallId } */
 create or replace function public.close_recall(p jsonb default '{}') returns jsonb
 language plpgsql volatile security definer set search_path = '' as $$
@@ -1763,7 +1791,7 @@ begin
   foreach f in array array['get_config', 'get_masters', 'get_dashboard', 'get_lots', 'get_inventory', 'get_recent_shipments',
     'get_shipment_by_no', 'save_master', 'save_sales_rule', 'register_receipt', 'change_lot_status', 'create_shipment',
     'cancel_shipment', 'register_return', 'trace_lot', 'trace_customer', 'create_recall', 'list_recalls', 'reextract_recall',
-    'update_recall_target', 'close_recall', 'get_setup', 'save_user_prefs', 'dispose_stock']
+    'update_recall_target', 'close_recall', 'get_setup', 'save_user_prefs', 'dispose_stock', 'record_recall_contact']
   loop
     execute format('revoke all on function public.%I(jsonb) from public', f);
     execute format('revoke all on function public.%I(jsonb) from anon', f);

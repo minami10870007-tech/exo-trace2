@@ -857,3 +857,13 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .form-grid > *, .field { min-width: 0; }
 select { max-width: 100%; }
 .lot-list { display: inline; }
+
+/* ---- UX round 54：回収対象を顧客ごとにまとめる ---- */
+.cust-group { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 12px; display: grid; gap: 10px; }
+.cust-group + .cust-group { margin-top: 12px; }
+.cust-group > .target-head .t { font-weight: 700; }
+.cust-group .target { background: var(--surface); }
+.contact-form { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+.contact-form .f-date { grid-column: 1 / -1; }
+.contact-form .btn, .contact-form .span-all { grid-column: 1 / -1; }
+@media (min-width: 768px) { .contact-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; } .contact-form .f-date { grid-column: auto; } .contact-form .btn { grid-column: auto; } }
