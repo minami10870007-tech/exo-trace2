@@ -1334,6 +1334,8 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
       const s = await api('getShipmentByNo', asked);
       if ($('rtShipNo').value !== asked) return; // 待っている間に別の番号が入力されたら、古い結果で上書きしない
       if (s.shipment_no !== S.rtNo && !(await confirmLeave())) { $('rtShipNo').value = S.rtNo; $('rtShipNo').removeAttribute('aria-invalid'); return; }
+      const same = s.shipment_no === S.rtNo, keepForm = same ? captureReturnForm() : null; // 同じ出荷の検索し直しでは、入力中のフォームをそのまま残す
+      if (!same && fromUrl && S.rtNo && unsavedScreens().includes('返品登録')) toast(`出荷 ${S.rtNo} の入力途中の内容は、「進む」で戻せます`);
       $('rtForm').hidden = true; S.returnLine = null; S.rtNo = s.shipment_no;
       $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
         <button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の出荷を選ぶ</button></div>` +
@@ -1348,7 +1350,8 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
       if (onPage) setUrl('#/return?no=' + encodeURIComponent(s.shipment_no), !fromUrl);
       $('rtShipNo').value = s.shipment_no; // 一部だけ入力された番号は、見つかった正式な番号に置き換える（下書きの保存・復元を合わせるため）
       if (!keepMsg && onPage) focusTo($('rtShipment').querySelector('.card-sub'));
-      if (!fromUrl && !keepMsg) restoreReturnDraft(s.shipment_no); // 同じ出荷を選び直したら、入力途中の内容を戻す
+      if (keepForm) restoreReturnForm(keepForm);
+      else if (!fromUrl && !keepMsg) restoreReturnDraft(s.shipment_no); // 同じ出荷を選び直したら、入力途中の内容を戻す
     } catch (err) {
       if (S.rtNo && !fromUrl) { // 表示中の出荷はそのまま残す（入力途中の内容も消さない）。番号の誤りだけを知らせる
         alertBox('rtFindMsg', err.message + `\n出荷番号を確かめてください。表示中の出荷（${S.rtNo}）はそのままです。`, 'ng');
@@ -1390,28 +1393,34 @@ function captureReturnForm() {
   return { line: S.returnLine, values: Object.fromEntries(['rtQty', 'rtDate', 'rtReason', 'rtQLoc', 'rtDisp', 'rtRLoc'].map((id) => [id, $(id).value])) };
 }
 /** 返品の入力途中の内容をタブ内に保存する（再読み込みしても戻せるように） */
-function saveReturnDraft() {
+//   出荷ごとに持つ（別の出荷に切り替えても、前の出荷の入力途中の内容は「戻る」で戻せる）。多くなりすぎないよう直近5件まで
+function readDrafts() {
   try {
-    const d = captureReturnForm();
-    if (d) sessionStorage.setItem('exo-return-draft', JSON.stringify({ user: S.user, no: S.rtNo, d }));
-    else sessionStorage.removeItem('exo-return-draft');
+    const all = JSON.parse(sessionStorage.getItem('exo-return-draft') || 'null');
+    return all && all.user === S.user && all.drafts ? all.drafts : {};
+  } catch (e) { return {}; }
+}
+function writeDraft(no, d) {
+  if (!no) return;
+  try {
+    const drafts = readDrafts();
+    delete drafts[no];
+    if (d) drafts[no] = d;
+    const keep = Object.fromEntries(Object.entries(drafts).slice(-5));
+    sessionStorage.setItem('exo-return-draft', JSON.stringify({ user: S.user, drafts: keep }));
   } catch (e) { /* 保存できない環境では何もしない */ }
 }
+function saveReturnDraft() { writeDraft(S.rtNo, captureReturnForm()); }
 
 /** タブ内に残っている、この出荷の入力途中の内容 */
-function returnDraftFor(no) {
-  try {
-    const draft = JSON.parse(sessionStorage.getItem('exo-return-draft') || 'null');
-    return draft && draft.user === S.user && draft.no === no ? draft.d : null;
-  } catch (e) { return null; }
-}
+function returnDraftFor(no) { return readDrafts()[no] || null; }
 /** 入力途中の内容を戻す。明細がもう返品できなければ知らせて下書きを消す */
 function restoreReturnDraft(no) {
   const d = returnDraftFor(no);
   if (!d || !$('rtForm').hidden) return;
   if (restoreReturnForm(d)) toast('入力途中の返品内容を戻しました');
   else {
-    try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
+    writeDraft(no, null);
     toast('入力途中だった明細は、もう返品できないため内容を戻せませんでした', 'warn');
   }
 }
@@ -1444,6 +1453,7 @@ async function loadReturnRecent() {
   }
   // URL に出荷番号が無い（「戻る」で一覧に戻った）ときは、出荷の表示を閉じて最近の出荷を出す
   // （入力途中の内容は下書きに残っているので、「進む」で戻せる）
+  if ($('rtShipment').innerHTML && unsavedScreens().includes('返品登録')) toast(`出荷 ${S.rtNo} の入力途中の内容は、「進む」で戻せます`);
   if ($('rtShipment').innerHTML) { $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null; S.rtNo = ''; $('rtShipNo').value = ''; alertBox('rtMsg', ''); alertBox('rtFindMsg', ''); }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
   $('rtRecent').innerHTML = `<h3 class="section-title">最近の出荷</h3>` + table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '', cls: 'actions' }],
@@ -1455,7 +1465,8 @@ async function loadReturnRecent() {
 /** 返品の入力をやめる：選んだ明細を元に戻し、そのボタンにフォーカスを戻す */
 function cancelReturn() {
   $('rtForm').hidden = true;
-  try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
+  writeDraft(S.rtNo, null);
+  $('rtReason').value = ''; $('rtQty').value = '';
   const sel = $('rtShipment').querySelector('[data-action="selectReturnLine"][data-id="' + S.returnLine + '"]');
   S.returnLine = null;
   $('rtShipment').querySelectorAll('tr.is-selected').forEach((tr) => tr.classList.remove('is-selected'));
@@ -1475,6 +1486,7 @@ function selectReturnLine(btn, quiet) {
   $('rtLineInfo').innerHTML = joinNw(btn.dataset.label.split('／').concat(['返品可能 ' + btn.dataset.max]));
   $('rtQty').max = btn.dataset.max;
   $('rtQty').value = '';
+  $('rtReason').value = ''; // 前の明細・出荷の理由を引き継がない（下書きを戻すときは、このあと上書きする）
   $('rtQtyHint').textContent = `最大 ${btn.dataset.max}`;
   $('rtDate').value = S.cfg.today;
   // 商品と同じ温度区分の保管場所だけを選べるようにする（1か所だけなら自動で選ぶ）
@@ -1515,7 +1527,7 @@ async function submitReturn(e) {
         (lot ? `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(lot)}">このロットを追跡</button>` : '') +
         (r.recall ? goBtn('recall', '回収案件を開く') : ''));
       $('rtReason').value = '';
-      try { sessionStorage.removeItem('exo-return-draft'); } catch (e2) { /* 何もしない */ }
+      writeDraft(S.rtNo, null);
       await findShipmentForReturn(null, true, true);
       $('rtFindMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       focusTo($('rtFindMsg').firstElementChild);
@@ -1652,8 +1664,8 @@ async function submitDispose(e) {
           f.querySelector('[data-action="dialogCancel"]').focus();
           return;
         }
-        $('dpQty').value = left; // 最新の上限まで入れておく（確認して記録できるように）
-        $('dpQty').setAttribute('aria-invalid', 'true');
+        $('dpQty').setAttribute('aria-invalid', 'true'); // 入力した数量はそのまま残し、最新の上限（ヒント）と見比べて直せるようにする
+        $('dpQty').focus();
         alertBox('dpMsg', `他の利用者の出荷・処分などで、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng');
         return;
       }
@@ -1734,7 +1746,7 @@ async function loadCustomerTrace() {
   if ($('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null }, true);
   else {
     $('tcBody').innerHTML = '';
-    if (qs.get('c')) alertBox('tcMsg', '指定の顧客が見つかりません。一覧から選んでください。', 'ng', true);
+    if (qs.get('c')) { alertBox('tcMsg', '指定の顧客が見つかりません。一覧から選んでください。', 'ng', true); setUrl('#/traceCustomer', false); }
   }
 }
 
@@ -2306,6 +2318,8 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();
   if (e.target.closest && e.target.closest('#rtForm')) saveReturnDraft();
+  // 数量を返品可能数の範囲に直したら、上に出ていた「超えています」の表示も消す
+  if (e.target.id === 'rtQty' && /返品可能数/.test($('rtFindMsg').textContent) && Number(e.target.value) >= 1 && Number(e.target.value) <= Number(e.target.max)) alertBox('rtFindMsg', '');
   if (e.target.classList.contains('slQty')) updateLineAvail(e.target.closest('.line'), true);
   if (e.target.classList.contains('insReason')) updateInspectAction(e.target.dataset.id);
 });

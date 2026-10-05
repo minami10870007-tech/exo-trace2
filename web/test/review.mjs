@@ -448,6 +448,9 @@ for (const vp of VIEWPORTS) {
     await page.waitForFunction(() => !document.getElementById('rtForm').hidden && document.getElementById('rtReason').value === '箱つぶれ', null, { timeout: 10000 })
       .catch(() => { throw new Error('「戻る」で入力途中の内容が戻らない'); });
     await page.click('[data-action="cancelReturn"]');
+    await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
+    if (await page.inputValue('#rtReason')) throw new Error('キャンセル後も前の理由が残っている');
+    await page.click('[data-action="cancelReturn"]');
   });
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
@@ -532,7 +535,7 @@ for (const vp of VIEWPORTS) {
     if ((await page.inputValue('#rtReason')) !== '下書きテスト' || await page.isHidden('#rtForm')) throw new Error('再読み込みで入力が戻らない');
     await page.click('[data-action="cancelReturn"]');
     await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
-    if (await page.evaluate(() => sessionStorage.getItem('exo-return-draft'))) throw new Error('キャンセルしても下書きが残る');
+    if (await page.evaluate(() => Object.keys((JSON.parse(sessionStorage.getItem('exo-return-draft') || '{}').drafts) || {}).length)) throw new Error('キャンセルしても下書きが残る');
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
