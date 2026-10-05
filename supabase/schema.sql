@@ -798,7 +798,7 @@ begin
       'allocatable', l.status = 'RELEASED' and not loc.is_quarantine and l.expires_on - v_today >= pr.min_remaining_days,
       'reason', case when l.status <> 'RELEASED' then exo.code_label('lot_status', l.status)
                      when loc.is_quarantine then '隔離保管中'
-                     when l.expires_on - v_today < pr.min_remaining_days then '残期間不足（' || pr.min_remaining_days || '日未満）' end)
+                     when l.expires_on - v_today < pr.min_remaining_days then '残期間' || pr.min_remaining_days || '日未満' end)
       order by pr.product_code, l.expires_on, l.id, loc.id)
     from exo.t_inventory i
     join exo.t_lot l on l.id = i.lot_id

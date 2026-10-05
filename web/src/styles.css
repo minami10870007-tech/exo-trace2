@@ -336,7 +336,7 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .rtable tr:last-child td { border-bottom: 0; }
 .rtable td.num, .rtable th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rtable tr.clickable { cursor: pointer; }
-.rtable tr.clickable:hover td { background: var(--surface-2); }
+@media (hover: hover) { .rtable tr.clickable:hover td { background: var(--surface-2); } }
 .rtable .mono, .mono { font-family: var(--mono); font-size: 13px; }
 @media (max-width: 767.98px) {
   .rtable thead { display: none; }
@@ -390,7 +390,7 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 /* ---------- 明細行（出荷） ---------- */
 .lines { display: grid; gap: 10px; margin-bottom: 12px; }
 .line {
-  display: grid; gap: 10px; grid-template-columns: 1fr 1fr; align-items: end;
+  display: grid; gap: 10px; grid-template-columns: 1fr 1fr; align-items: start;
   padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2);
 }
 .line .field-product { grid-column: 1 / -1; }
@@ -769,3 +769,27 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .line-avail.short { color: var(--danger); font-weight: 700; }
 .recent-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .recent-chips .btn { font-family: var(--mono); }
+
+/* ---------- UX round 4 ---------- */
+@media (hover: hover) and (max-width: 767.98px) {
+  .rtable tr.clickable:hover td { background: transparent; }
+  .rtable tr.clickable:hover { background: var(--surface-2); }
+}
+@media (hover: hover) and (min-width: 768px) and (max-width: 1279.98px) {
+  .rtable.wide-table tr.clickable:hover td { background: transparent; }
+  .rtable.wide-table tr.clickable:hover { background: var(--surface-2); }
+}
+.line .line-remove { align-self: end; }
+.badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.contacts { display: grid; gap: 0; }
+.contacts .contact { display: block; }
+.target-head .s a { display: inline-flex; align-items: center; min-height: var(--tap); }
+.rules-confirm { padding: 0 16px 16px; margin: 4px 0 0; }
+@media (min-width: 768px) { .rules-confirm { padding: 4px 16px 16px; } }
+@media (max-width: 479.98px) {
+  .guide-resume { flex-wrap: wrap; row-gap: 6px; }
+  .guide-resume > .ic { order: 0; }
+  .guide-resume-text { order: 1; flex: 1 1 0; }
+  .guide-resume .icon-btn { order: 2; }
+  .guide-resume .btn { order: 3; flex: 1 1 100%; }
+}
