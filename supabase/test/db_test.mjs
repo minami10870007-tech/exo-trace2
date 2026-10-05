@@ -39,6 +39,13 @@ try {
   ok(psql(sb.db, "select count(*) from information_schema.role_routine_grants where routine_schema = 'public' and grantee in ('anon', 'PUBLIC')") === '0', 'anon / PUBLIC に実行権限なし');
   ok(psql(sb.db, "select has_schema_privilege('authenticated', 'exo', 'USAGE')::text") === 'false', 'authenticated は exo スキーマを直接使えない');
   ok(psql(sb.db, "select count(*) from pg_proc where pronamespace in ('public'::regnamespace, 'exo'::regnamespace) and not (proconfig @> array['search_path=\"\"'])") === '0', '全関数で search_path を固定');
+  // 利用者の登録・停止（管理者用）：大文字混じりでも登録でき、停止→再登録もできる
+  psql(sb.db, "select exo.allow_user(' Stranger@Example.com ')");
+  ok((await sb.rpc(stranger, 'get_config')).user === 'stranger@example.com', 'exo.allow_user で利用可能になる（大文字・空白を正規化）');
+  psql(sb.db, "select exo.disallow_user('stranger@example.com')");
+  try { await sb.rpc(stranger, 'get_config'); assert.fail('停止した利用者が実行できた'); } catch (e) { ok(e.status === 403, 'exo.disallow_user で停止'); }
+  psql(sb.db, "select exo.allow_user('stranger@example.com'); select exo.disallow_user('stranger@example.com')");
+  ok(psql(sb.db, "select is_active::text from exo.app_user where email = 'stranger@example.com'") === 'false', '停止→再登録→停止');
   // schema.sql は何度実行してもよい（データ・権限が維持される）
   psql(sb.db, '', { file: join(here, '..', 'schema.sql') });
   let M = await G.get_masters();

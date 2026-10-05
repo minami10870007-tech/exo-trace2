@@ -61,47 +61,51 @@ xlsx を直接編集すると次回の生成で上書きされます。変更は
 1. https://supabase.com にログインし、「New project」でプロジェクトを作ります。
    - Region：Northeast Asia (Tokyo)
    - Database Password：任意（控えておく）
+   - Security の「Enable Data API」は**オンのまま**にします（画面がデータベースにつながる入口です）。ほかのチェックはどちらでも構いません。
 2. 左メニュー「SQL Editor」→「New query」に、`supabase/schema.sql` の中身をすべて貼り付けて「Run」を押します。「Success. No rows returned」と出れば完了です。
+   - 実行前に「Potential issues detected」（削除を含む処理がある、などの確認）が出ることがあります。更新に備えた削除なので、**実行する側のボタンを押してください**（Cancel は押さない）。
 
 **2. 利用者を作る**
-1. 「Authentication」→「Sign In / Providers」で、**「Allow new users to sign up」をオフ**にして保存します。知らない人が自分でアカウントを作れないようにするためです。
-2. 「Authentication」→「Users」→「Add user」→「Create new user」で、メールアドレスとパスワードを入れます。**「Auto Confirm User」にチェック**を入れて「Create user」を押します。
+1. 「Authentication」→「Sign In / Providers」の「User Signups」にある **「Allow new users to sign up」をオフ**にして、「Save changes」を押します。知らない人が自分でアカウントを作れないようにするためです。
+2. 「Authentication」→「Users」→「Add user」→「Create new user」で、メールアドレスとパスワードを入れます。**「Auto confirm user?」にチェックが入っていること**を確認して「Create user」を押します。
 3. 「SQL Editor」→「New query」で次を実行し、利用を許可します。人数分、行を増やしてください。
    ```sql
-   insert into exo.app_user (email) values ('taro@example.com');
+   select exo.allow_user('taro@example.com');
    ```
 
-**3. 接続情報を控える**（「Project Settings」）
-- 「Data API」の **Project URL**（例：`https://abcdefgh.supabase.co`）
-- 「API Keys」の **Publishable key**（`sb_publishable_…`）。または「Legacy API Keys」タブの **anon public**（`eyJ…`）
+**3. 接続情報を控える**
+- プロジェクト画面上部の **「Connect」** を押すと、**Project URL**（例：`https://abcdefgh.supabase.co`）と **Publishable key**（`sb_publishable_…`）が表示されます。
+- 「Project Settings」→「API Keys」でも確認できます。古いプロジェクトでは「Legacy anon, service_role API keys」タブの **anon public**（`eyJ…`）でも構いません。
 - **service_role / Secret key は使いません。** 絶対に貼らないでください。
 
-**4. Netlify**
-1. このリポジトリを「Add new project → Import an existing project」で接続します。ビルド設定は `netlify.toml` から自動で読まれます。
-2. 環境変数を次のとおり設定します。
+**4. Netlify（以前このリポジトリをデプロイしたプロジェクトをそのまま使います）**
+1. Netlify で既存のプロジェクトを開き、「Project configuration」→「Environment variables」を開きます。
+   新しく作り直す必要はありません。初めての場合だけ「Add new project」→「Import an existing project」で接続します。
+2. 「Add a variable」→「Add a single variable」で、次の2つを追加します。
 
-   | 変数 | 値 |
+   | Key | Value |
    |---|---|
    | `SUPABASE_URL` | 手順3の Project URL |
    | `SUPABASE_ANON_KEY` | 手順3の Publishable key（または anon public） |
 
-   - 公開用のキーなので「Contains secret values」は付けても付けなくても動きます。
-   - Scopes は「All scopes」のまま、少なくとも「Functions」を含めてください。
-   - 以前の Apps Script 連携で使っていた `GAS_URL` / `GAS_SECRET` / `SESSION_SECRET` / `EXO_USERS` は不要です。削除してください。
-3. 「Deploys」→「Trigger deploy」→「Deploy project」で再デプロイします。サイトを開き、手順2のメールアドレスとパスワードでログインします。
+   - 公開用のキーなので、**「Contains secret values」にはチェックを入れません**。
+   - Scopes が選べる場合は「All scopes」のままにします。
+3. 同じ画面で、以前の Apps Script 連携の `GAS_URL` / `GAS_SECRET` / `SESSION_SECRET` / `EXO_USERS` を削除します（もう使いません）。
+4. 「Deploys」→「Trigger deploy」→「Deploy project」で再デプロイします。「Published」になったらサイトを開き、手順2のメールアドレスとパスワードでログインします。
    スマホでは、ブラウザの「ホーム画面に追加」でアプリのように使えます。
 
 ### 運用メモ
 
-- **利用者を追加する：** 手順2の2と3を行います。
+- **利用者を追加する：** 手順2の2と3を行います（一度止めた人を戻すときも同じです）。
 - **利用者を止める：** SQL Editor で次を実行します。あわせて Authentication → Users でユーザーを削除します。
   ```sql
-  update exo.app_user set is_active = false where email = 'taro@example.com';
+  select exo.disallow_user('taro@example.com');
   ```
-- **パスワードを再設定する：** Authentication → Users でユーザーを削除して作り直します（利用者登録はそのまま残ります）。
-- **日次チェック：** 毎日 1:00（日本時間）に Supabase の pg_cron で自動実行されます。内容は、期限切れロットを「期限切れ」にすることと、在庫と在庫移動履歴の照合です。不一致があればダッシュボードに表示されます。
+- **パスワードを再設定する：** ダッシュボードからパスワードを直接変える機能はありません。Authentication → Users でユーザーを削除し、同じメールアドレスで作り直してください（利用者登録はそのまま残ります）。
+- **日次チェック：** 毎日 1:00（日本時間）に Supabase の pg_cron で自動実行されます。内容は、期限切れロットを「期限切れ」にすることと、在庫と在庫移動履歴の照合です。不一致があればダッシュボードに表示されます。設定されたかは「Integrations」→「Cron」に `exo-trace-daily-check` があるかで確認できます。
 - **更新版の `schema.sql`：** もう一度 SQL Editor に貼って実行します。データは消えません。
-- **Supabase の無料プラン：** 1週間アクセスがないとプロジェクトが一時停止します。ダッシュボードから再開できます。データは保持されます。
+- **Supabase の無料プラン：** しばらく利用がないとプロジェクトが一時停止します（事前にメールが届きます）。ダッシュボードの「Resume project」で再開できます。データは保持されます（停止から1年以内）。
+- **Netlify の環境変数を変えたとき：** 再デプロイすると反映されます。
 - **独自ドメインの Supabase：** `*.supabase.co` 以外の URL を使う場合は、`netlify.toml` の CSP（`connect-src`）にその URL を追加してください。
 
 ### ローカルで確認・テスト

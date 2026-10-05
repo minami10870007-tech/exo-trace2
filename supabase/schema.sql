@@ -7,9 +7,12 @@
 -- 使い方（ターミナル不要）
 --   1. Supabase ダッシュボード「SQL Editor」→「New query」にこのファイルの内容をすべて貼り付けて「Run」
 --      （何度実行しても既存データは消えません。更新版を貼り直すときも同じ手順です）
---   2. 「Authentication」→「Users」→「Add user」→「Create new user」で利用者を作成（Auto Confirm User にチェック）
---   3. SQL Editor で、利用を許可するメールアドレスを登録する（人数分）
---        insert into exo.app_user (email) values ('taro@example.com');
+--      （実行前に「destructive operations（削除を含む）」の確認が出ることがあります。更新のための削除なので実行してかまいません）
+--   2. 「Authentication」→「Sign In / Providers」で「Allow new users to sign up」をオフにして保存
+--   3. 「Authentication」→「Users」→「Add user」→「Create new user」で利用者を作成（Auto confirm user にチェック）
+--   4. SQL Editor で、利用を許可するメールアドレスを登録する（人数分）
+--        select exo.allow_user('taro@example.com');
+--      利用を止めるとき： select exo.disallow_user('taro@example.com');
 --
 -- 構成
 --   exo スキーマ … テーブルと内部関数。API（PostgREST）には公開しない
@@ -268,13 +271,24 @@ create table if not exists exo.t_job_log (
 );
 
 -- API から直接は触れない（多重防御として RLS も有効化。ポリシーなし＝全拒否）
-do $$
-declare t text;
-begin
-  for t in select tablename from pg_tables where schemaname = 'exo' loop
-    execute format('alter table exo.%I enable row level security', t);
-  end loop;
-end $$;
+alter table exo.app_user enable row level security;
+alter table exo.m_supplier enable row level security;
+alter table exo.m_product enable row level security;
+alter table exo.m_customer enable row level security;
+alter table exo.m_location enable row level security;
+alter table exo.m_sales_rule enable row level security;
+alter table exo.t_lot enable row level security;
+alter table exo.t_receipt enable row level security;
+alter table exo.t_inventory enable row level security;
+alter table exo.t_stock_movement enable row level security;
+alter table exo.t_shipment enable row level security;
+alter table exo.t_shipment_line enable row level security;
+alter table exo.t_recall enable row level security;
+alter table exo.t_recall_lot enable row level security;
+alter table exo.t_recall_target enable row level security;
+alter table exo.t_return enable row level security;
+alter table exo.t_lot_status_history enable row level security;
+alter table exo.t_job_log enable row level security;
 
 -- -----------------------------------------------------------------------------
 -- 内部関数（exo スキーマ）
@@ -300,6 +314,21 @@ $$;
 create or replace function exo.code_label(p_type text, p_value text) returns text
 language sql immutable set search_path = '' as $$
   select coalesce(exo.codes() -> p_type ->> p_value, p_value)
+$$;
+
+/** 利用者の登録（管理者が SQL Editor で実行）: select exo.allow_user('taro@example.com'); */
+create or replace function exo.allow_user(p_email text) returns text
+language sql volatile set search_path = '' as $$
+  insert into exo.app_user (email) values (lower(btrim(p_email)))
+  on conflict (email) do update set is_active = true
+  returning email || ' を利用できるようにしました'
+$$;
+
+/** 利用者の停止（管理者が SQL Editor で実行）: select exo.disallow_user('taro@example.com'); */
+create or replace function exo.disallow_user(p_email text) returns text
+language sql volatile set search_path = '' as $$
+  update exo.app_user set is_active = false where email = lower(btrim(p_email))
+  returning email || ' の利用を停止しました'
 $$;
 
 /** 業務日付（日本時間）。テスト用に設定 exo.today で固定できる（API からは設定できない） */

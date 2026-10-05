@@ -1,9 +1,9 @@
 // GET /api/config → 画面が Supabase に接続するための設定（プロジェクト URL と公開用 anon キー）を返す。
-//   値は Netlify の環境変数から読むため、キーを変えても再ビルドは不要（関数は次のリクエストから新しい値を返す）。
+//   値は Netlify の環境変数から読む（環境変数を変えたら再デプロイすると反映される）。
 //   SUPABASE_URL      … Supabase の Project URL（例 https://abcdefgh.supabase.co）
 //   SUPABASE_ANON_KEY … Supabase の公開用キー（anon / publishable）。ブラウザに渡る前提のキーで、
 //                       データの保護はデータベース側（ログイン必須の関数＋利用者登録）で行う。
-//   ※ Netlify の Supabase 連携で作られる SUPABASE_DATABASE_URL / SUPABASE_PUBLISHABLE_KEY でも動く。
+//   ※ Netlify の Supabase 連携（拡張機能）で作られる SUPABASE_DATABASE_URL でも動く。
 const env = (key) => String(globalThis.Netlify?.env?.get(key) ?? process.env[key] ?? '').trim();
 
 function json(body, status = 200) {

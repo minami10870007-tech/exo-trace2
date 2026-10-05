@@ -70,7 +70,7 @@ export async function startSupabase({ db = 'exo_test', users = [], today = '2026
   const accounts = new Map();
   for (const u of users) {
     accounts.set(u.email.toLowerCase(), { id: crypto.randomUUID(), email: u.email.toLowerCase(), password: u.password });
-    if (u.allowed) psql(db, `insert into exo.app_user (email) values ('${u.email.toLowerCase()}')`);
+    if (u.allowed) psql(db, `select exo.allow_user('${u.email.toLowerCase()}')`);
   }
 
   // PostgREST
