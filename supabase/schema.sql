@@ -406,6 +406,21 @@ begin
   return p_result;
 end $$;
 
+/** 品質上止まっている状態の言い方（入荷・判定を断るときに使う） */
+create or replace function exo.block_label(p_status text) returns text
+language sql immutable set search_path = '' as $$
+  select case p_status when 'RECALLED' then '回収中' when 'REJECTED' then '不合格' when 'EXPIRED' then '期限切れ' else p_status end
+$$;
+
+/** 同じ仕入先ロット（仕入先・商品・仕入先ロット番号が同じ）で、品質上止まっている社内ロット（なければ null） */
+create or replace function exo.blocked_sibling(p_supplier bigint, p_product bigint, p_sup_lot text, p_except bigint default null) returns exo.t_lot
+language sql stable set search_path = '' as $$
+  select * from exo.t_lot
+  where supplier_id = p_supplier and product_id = p_product and upper(supplier_lot_no) = upper(p_sup_lot)
+    and status in ('RECALLED', 'REJECTED', 'EXPIRED') and id is distinct from p_except
+  order by id limit 1
+$$;
+
 create or replace function exo.write_lock() returns void
 language plpgsql volatile set search_path = '' as $$
 begin
@@ -1082,6 +1097,7 @@ declare
   v_receipt_no text;
   v_warning text := '';
   v_note text;
+  v_block exo.t_lot;
 begin
   perform exo.write_lock();
   -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
@@ -1125,9 +1141,11 @@ begin
   if v_lot.id is not null and v_lot.expires_on <> v_exp then
     perform exo.fail('仕入先ロット番号「' || v_sup_lot || '」は既に使用期限 ' || v_lot.expires_on || ' で登録されています。使用期限を確認してください。');
   end if;
-  if v_lot.id is not null and v_lot.status in ('REJECTED', 'RECALLED', 'EXPIRED') then -- 品質上の理由で止まっているロットは受け入れない
-    perform exo.fail('仕入先ロット「' || v_lot.supplier_lot_no || '」は' || exo.code_label('lot_status', v_lot.status)
-      || '（社内ロット ' || v_lot.lot_no || '）のため入荷できません。品質責任者に確認し、仕入先へ返品してください。');
+  -- 同じ仕入先ロットのどれかが品質上止まっていれば受け入れない（分納で別ロットになっていても）
+  v_block := exo.blocked_sibling(v_supplier.id, v_product.id, v_sup_lot);
+  if v_block.id is not null then
+    perform exo.fail('仕入先ロット「' || v_block.supplier_lot_no || '」は' || exo.block_label(v_block.status)
+      || '（社内ロット ' || v_block.lot_no || '）のため入荷できません。品質責任者に確認し、仕入先へ返品してください。');
   end if;
   if v_lot.id is not null and v_lot.status in ('QUARANTINE', 'VOID') then
     if v_lot.status = 'VOID' then
@@ -1178,6 +1196,7 @@ declare
   v_to text := exo.j_text(p, 'to');
   v_reason text := exo.j_text(p, 'reason');
   v_allowed jsonb := '{"QUARANTINE": ["RELEASED", "REJECTED", "HOLD"], "RELEASED": ["HOLD"], "HOLD": ["RELEASED", "QUARANTINE", "REJECTED"]}';
+  v_sib exo.t_lot;
 begin
   perform exo.write_lock();
   if exo.idem_get(p, 'change_lot_status') is not null then return exo.idem_get(p, 'change_lot_status'); end if; -- 再送なら前回の結果
@@ -1193,6 +1212,11 @@ begin
       coalesce(exo.code_label('lot_status', v_to), '') || '」には変更できません。');
   end if;
   if v_to = 'RELEASED' then
+    v_sib := exo.blocked_sibling(v_lot.supplier_id, v_lot.product_id, v_lot.supplier_lot_no, v_lot.id);
+    if v_sib.id is not null and v_sib.status in ('RECALLED', 'REJECTED') then
+      perform exo.fail('同じ仕入先ロット「' || v_lot.supplier_lot_no || '」の社内ロット ' || v_sib.lot_no || ' が' || exo.block_label(v_sib.status)
+        || 'のため、合格にできません。品質責任者に確認してください（保留・不合格にはできます）。');
+    end if;
     if not exo.j_bool(p, 'coaConfirmed') then perform exo.fail('合格にはCOA（試験成績書）の確認が必要です（BR-08）。'); end if;
     if v_lot.status = 'HOLD' and v_lot.inspected_at is null then
       perform exo.fail('未検品のロットは「検品待ち」に戻してから検品してください（BR-17）。');
@@ -1582,8 +1606,15 @@ begin
     perform exo.fail('ロットが見つかりません。画面を再読込してください。');
   end if;
   if exists (select 1 from exo.t_lot where id = any (v_ids) and status = 'VOID') then
-    perform exo.fail('無効（VOID）のロットは回収対象に指定できません。');
+    perform exo.fail('無効なロットは回収対象に指定できません。');
   end if;
+  -- 同じ仕入先ロットの別の社内ロット（分納分）も、回収対象に含める（同じ製品が出荷され続けないように）
+  select array_agg(distinct s.id) into v_ids from exo.t_lot s
+  where s.id = any (v_ids)
+     or (s.status not in ('VOID', 'RECALLED')
+         and exists (select 1 from exo.t_lot t where t.id = any (v_ids) and t.supplier_id = s.supplier_id and t.product_id = s.product_id
+                     and upper(t.supplier_lot_no) = upper(s.supplier_lot_no))
+         and not exists (select 1 from exo.t_recall_lot rl join exo.t_recall r on r.id = rl.recall_id where rl.lot_id = s.id and r.status <> 'CLOSED'));
   select string_agg('ロット ' || lt.lot_no || '（' || r.recall_no || '）', '、' order by lt.lot_no) into v_title_dup
   from exo.t_recall_lot rl join exo.t_recall r on r.id = rl.recall_id join exo.t_lot lt on lt.id = rl.lot_id
   where rl.lot_id = any (v_ids) and r.status <> 'CLOSED';

@@ -1249,7 +1249,7 @@ async function submitReceipt(e) {
       delete $('rcExp').dataset.manual;
       guideAfterAction();
     } catch (err) {
-      const field = [[/入荷数量/, 'rcQty'], [/入荷日/, 'rcDate'], [/製造日/, 'rcMfg'], [/使用期限/, 'rcExp'], [/仕入単価/, 'rcPrice'], [/仕入先ロット番号/, 'rcSupLot'],
+      const field = [[/入荷数量/, 'rcQty'], [/入荷日/, 'rcDate'], [/製造日/, 'rcMfg'], [/使用期限/, 'rcExp'], [/仕入単価/, 'rcPrice'], [/仕入先ロット/, 'rcSupLot'],
         [/保管場所/, 'rcLoc'], [/到着時温度/, 'rcTemp'], [/商品/, 'rcProduct'], [/仕入先/, 'rcSupplier']].find(([re]) => re.test(err.message));
       if (/無効/.test(err.message)) { // 他の利用者が無効にした商品・仕入先：一覧を最新にして選び直してもらう
         await freshMasters(true);
@@ -2179,8 +2179,8 @@ async function loadRecalls(exceptId) {
   const [lots, recalls0] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
   const recalls = [...recalls0].sort((a, b) => (a.status === 'CLOSED') - (b.status === 'CLOSED')); // 対応中の案件を先に
   const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
-  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
-      <small>${joinNw([l.product, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
+  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}" data-key="${esc(l.product_id + ':' + String(l.supplier_lot_no).toUpperCase())}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
+      <small>${joinNw([l.product, '仕入先ロット ' + l.supplier_lot_no, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
   $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
   restoreTargetForms(snap);
@@ -2248,7 +2248,11 @@ async function submitRecall(e) {
     const c = $('rcLots').querySelector('input'); if (c) c.focus(); // すぐ選べるように、最初のロットへ
     return;
   }
-  if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロット（${[...$('rcLots').querySelectorAll('input:checked')].map((i) => i.closest('label').querySelector('b').textContent).join('、')}）を回収対象にし、出荷を停止します。`, okText: '回収を開始', danger: true }))) return;
+  // 同じ仕入先ロットの別の社内ロット（分納分）は、サーバーが自動で回収対象に含める。そのことを先に伝える
+  const keys = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.dataset.key));
+  const sibs = [...$('rcLots').querySelectorAll('input:not(:checked)')].filter((i) => keys.has(i.dataset.key)).map((i) => i.closest('label').querySelector('b').textContent);
+  if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロット（${[...$('rcLots').querySelectorAll('input:checked')].map((i) => i.closest('label').querySelector('b').textContent).join('、')}）を回収対象にし、出荷を停止します。` +
+    (sibs.length ? `\n\n同じ仕入先ロットの分納分（${sibs.join('、')}）も回収対象に含めます。` : ''), okText: '回収を開始', danger: true }))) return;
   await busy(e.submitter, async () => {
     try {
       const r = await api('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds });

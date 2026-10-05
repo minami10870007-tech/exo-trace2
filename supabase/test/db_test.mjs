@@ -274,6 +274,18 @@ try {
   const nos = new Set((await G.get_recent_shipments({ limit: 50 })).map((s) => s.shipment_no));
   ok(nos.size === (await G.get_recent_shipments({ limit: 50 })).length, '同時実行でも出荷番号が重複しない');
 
+  // ---------------- 分納と回収 ----------------
+  { const a = await rcp({ supplierLotNo: 'SIB-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 3, unitPrice: 1 });
+    const aid = psql(sb.db, `select id from exo.t_lot where lot_no = '${a.lotNo}'`);
+    await G.change_lot_status({ lotId: aid, to: 'RELEASED', coaConfirmed: true, expectedStatus: 'QUARANTINE' });
+    const b = await rcp({ supplierLotNo: 'sib-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 2, unitPrice: 1 });
+    const bid = psql(sb.db, `select id from exo.t_lot where lot_no = '${b.lotNo}'`);
+    ok(b.lotNo !== a.lotNo, '分納：合格済みの仕入先ロットは別の社内ロットで受ける');
+    const rc = await G.create_recall({ title: '分納テスト', reason: 'テスト', severity: 'II', lotIds: [aid] });
+    ok(rc.lots.includes(b.lotNo), '回収：同じ仕入先ロットの分納ロットも対象に含める');
+    await throwsMsg(rcp({ supplierLotNo: 'SIB-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 1, unitPrice: 1 }), /回収中/, '回収中の仕入先ロットは入荷できない');
+    ok(psql(sb.db, `select status from exo.t_lot where id = ${bid}`) === 'RECALLED', '分納ロットも回収中になる'); }
+
   // ---------------- 日次チェック ----------------
   psql(sb.db, `alter database ${sb.db} set exo.today = '2027-07-05'`);
   const dc = JSON.parse(psql(sb.db, "set exo.today = '2027-07-05'; select exo.daily_check()"));

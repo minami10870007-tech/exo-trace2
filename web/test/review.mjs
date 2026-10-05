@@ -514,7 +514,9 @@ for (const vp of VIEWPORTS) {
     const no = psql(server.sb.db, "select shipment_no from exo.t_shipment where note like 'DUP-SHIP-TEST%'");
     await page.evaluate(() => loadShipmentPage());
     await page.click(`#shRecent [data-action="cancelShip"][data-no="${no}"]`); await page.fill('#dialogInput', 'テスト取消'); await page.click('#dialogOk'); await idle(page);
+    await page.waitForFunction((n) => { const tr = document.querySelector(`#shRecent tr[data-no="${n}"]`); return tr && !tr.querySelector('[data-action="cancelShip"]'); }, no, { timeout: 10000 });
     await page.fill('.slQty', ''); await page.fill('#shNote', ''); await page.evaluate(() => alertBox('shMsg', ''));
+    if (await page.inputValue('#shNote')) throw new Error('備考が残った');
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
   await step('マスタ保存の応答が届かないまま閉じても、保存されていたかを伝える', async () => {
