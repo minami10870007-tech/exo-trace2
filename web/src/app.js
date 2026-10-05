@@ -315,6 +315,14 @@ function fieldErr(el, msg) {
   f.insertAdjacentHTML('beforeend', `<div class="field-err req-err">${esc(msg)}</div>`);
 }
 
+/** 選べる保管場所が無いとき、欄の下に登録先への案内を出す */
+function locHint(id, text) {
+  const f = $(id).closest('.field'); let h = f.querySelector('.loc-hint');
+  if (!text) { if (h) h.remove(); return; }
+  if (!h) { h = document.createElement('div'); h.className = 'loc-hint'; f.appendChild(h); }
+  h.innerHTML = `<div class="alert alert-info"><div class="alert-text">${esc(text)}<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goMaster" data-table="m_location">保管場所を登録する</button></div></div></div>`;
+}
+
 /** ラベルの文字（「任意」などの補足を除く） */
 function labelOf(el) {
   const lab = el.id && document.querySelector(`label[for="${el.id}"]`);
@@ -583,7 +591,7 @@ function restoreDialog(d) {
 function clearScreens() {
   S.pageHash = {};
   // 登録待ちの状態は利用者ごと：ログアウトしたら捨てる（共用端末で次の人に持ち越さない）
-  S.req = {}; S.unsure = {}; S.changed = {}; S.checked = {}; S.masterSent = null; S.cancelReason = {};
+  S.req = {}; S.unsure = {}; S.changed = {}; S.checked = {}; S.masterSent = null; S.cancelReason = {}; S.invScope = null; S.recallJump = null;
   try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
   document.querySelectorAll('#app form').forEach((f) => f.reset());
   ['dashKpis', 'dashBody', 'shDone', 'invMsg', 'tcMsg', 'rtFindMsg', 'rtRecent', 'tlRecent', 'rcMsg', 'insMsg', 'insBody', 'shLines', 'shMsg', 'shRecent', 'rtShipment', 'rtMsg', 'invBody', 'tlBody', 'tcBody',
@@ -1144,7 +1152,7 @@ async function loadDashboard() {
   const recalls = d.recalls.length ? '<ul class="list">' + d.recalls.map((r) => `<li><div class="grow"><span class="eyebrow">${esc(r.recall_no)}</span><div class="t">${esc(r.title)}</div>
       <div class="s">${r.activeTargets ? `対象顧客 ${r.activeTargets}件・連絡済 ${r.contactedRate}%・回収 ${fmt(r.recQty)} / ${fmt(r.shippedQty)}${r.unrecQty ? `（回収不能 ${fmt(r.unrecQty)}）` : ''}` : '出荷実績のある顧客なし'}</div>
       <div class="meter"><i data-w="${r.recoveredRate}"></i></div></div>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="recall">開く</button></li>`).join('') + '</ul>'
+      <button type="button" class="btn btn-secondary btn-sm" data-action="openRecall" data-id="${r.id}" aria-label="${esc(r.recall_no)} を開く">開く</button></li>`).join('') + '</ul>'
     : empty('対応中の回収案件はありません', 'check');
   const lc = d.lastCheck;
   const mismatch = lc && lc.mismatches && lc.mismatches.length ? `<div class="alert alert-ng span-full" role="alert">在庫数と在庫移動履歴が一致しない在庫が ${lc.mismatches.length} 件あります（日次チェック ${esc(lc.ran_at)}）。\n` +
@@ -1183,6 +1191,7 @@ function fillReceiptLocations() {
   $('rcProductInfo').innerHTML = p ? joinNw([p.name, '保管 ' + code('storage_class', p.storage_class), '有効期間 ' + p.shelf_life_days + '日']) : '';
   const locs = active(S.M.locations).filter((l) => String(l.is_quarantine) !== 'true' && (!p || l.storage_class === p.storage_class));
   $('rcLoc').innerHTML = options(locs, 'id', (l) => l.name + '（' + l.location_code + '）', locs.length ? '選択してください' : '該当する保管場所がありません');
+  locHint('rcLoc', p && !locs.length ? `${code('storage_class', p.storage_class)}の保管場所が登録されていません。「マスタ設定」の「保管場所」で登録してください。` : '');
   if (locs.length === 1) setValue($('rcLoc'), locs[0].id);
 }
 
@@ -1198,7 +1207,7 @@ function autoExpiry() {
 
 async function submitReceipt(e) {
   e.preventDefault();
-  if ($('rcSupLot').value) $('rcSupLot').value = half($('rcSupLot').value);
+  if ($('rcSupLot').value) $('rcSupLot').value = half($('rcSupLot').value).toUpperCase(); // 大文字・小文字の違いで別ロットにならないように
   if (!checkRequired($('receiptForm'), 'rcMsg')) return;
   // 数量・日付の規則をまとめて確認し、問題のある欄をすべて示す
   const q = Number($('rcQty').value), d = $('rcDate').value, exp = $('rcExp').value, mfg = $('rcMfg').value;
@@ -1457,7 +1466,7 @@ async function submitShipment(e) {
     const un = unshippableFor(shortP);
     alertBox('shMsg', `「${(S.M.products.find((p) => String(p.id) === shortP) || {}).name}」の数量が引当可能数（${fmt(availFor(shortP))}）を超えています。` +
       (un ? `\nほかに在庫 ${fmt(un.qty)} がありますが、${un.why}のため出荷できません。` : ''), 'ng', true,
-      un ? `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-q="${esc((S.M.products.find((p) => String(p.id) === shortP) || {}).product_code || '')}">在庫照会で確認</button>` : '');
+      un ? `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-prod="${esc((S.M.products.find((p) => String(p.id) === shortP) || {}).product_code || '')}" data-label="${esc('商品 ' + ((S.M.products.find((p) => String(p.id) === shortP) || {}).name || ''))}">在庫照会で確認</button>` : '');
     el.focus();
     return;
   }
@@ -1799,6 +1808,7 @@ function selectReturnLine(btn, quiet) {
   const fill = (id, list) => {
     $(id).innerHTML = options(list, 'id', (l) => l.name + '（' + l.location_code + '）', list.length ? '選択してください' : '該当する保管場所がありません');
     if (list.length === 1) $(id).value = list[0].id;
+    locHint(id, list.length ? '' : `${code('storage_class', btn.dataset.storage)}の${id === 'rtQLoc' ? '隔離保管場所' : '保管場所'}が登録されていません。「マスタ設定」の「保管場所」で登録してください。`);
   };
   fill('rtQLoc', locs.filter((l) => String(l.is_quarantine) === 'true'));
   fill('rtRLoc', locs.filter((l) => String(l.is_quarantine) !== 'true'));
@@ -1892,14 +1902,17 @@ function renderInventory() {
   const q = half($('invFilter').value, false).toUpperCase(); // 名前に「ー」を含むので、ハイフンへの置き換えはしない
   const avail = $('invAvail').checked;
   const preset = INV_PRESETS[S.invPreset];
-  $('invPreset').innerHTML = preset ? `<span class="preset-chip">絞り込み：${esc(preset.label)}<button type="button" class="icon-btn" data-action="clearInvPreset" aria-label="絞り込みを解除">${icon('x')}</button></span>` : '';
+  const sc = S.invScope;
+  const chipLabel = [preset && preset.label, sc && sc.label].filter(Boolean).join('・');
+  $('invPreset').innerHTML = chipLabel ? `<span class="preset-chip">絞り込み：${esc(chipLabel)}<button type="button" class="icon-btn" data-action="clearInvPreset" aria-label="絞り込みを解除">${icon('x')}</button></span>` : '';
   // 日本語入力で打った「ー」（例：BSー2409）は、英数字のあいだならハイフンとしても探す（商品名の「ー」はそのまま）
   const terms = q.split(/\s+/).filter(Boolean).map((t) => [...new Set([t, t.replace(/(?<=[A-Z0-9])ー|ー(?=[A-Z0-9])/g, '-')])]);
   // ロット番号を並べた絞り込み（回収案件の対象ロットなど）は「どれか」に一致すればよい
   const lotNos = new Set(S.inventory.map((r) => String(r.lot_no).toUpperCase()));
   const anyLot = terms.length > 1 && terms.every((alts) => alts.some((t) => lotNos.has(t)));
   const hit = (r, alts) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no, r.location].some((v) => alts.some((t) => half(v, false).toUpperCase().includes(t))); // 比べる側も同じ形に（℃ など）
-  const rows = S.inventory.filter((r) => (!avail || r.allocatable) && (!preset || preset.test(r)) &&
+  const inScope = (r) => !sc || ((!sc.lots || sc.lots.includes(r.lot_no)) && (!sc.loc || String(r.location_id) === String(sc.loc)) && (!sc.prod || r.product_code === sc.prod));
+  const rows = S.inventory.filter((r) => inScope(r) && (!avail || r.allocatable) && (!preset || preset.test(r)) &&
     (!terms.length || (anyLot ? terms.some((alts) => alts.includes(String(r.lot_no).toUpperCase())) : terms.every((alts) => hit(r, alts)))));
   $('invBody').innerHTML = table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, '仕入先ロット', { label: '保管場所', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' },
     { label: '残日数', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '数量', cls: 'num' }, { label: '', cls: 'actions' }],
@@ -1908,8 +1921,8 @@ function renderInventory() {
       html(esc(r.location) + (r.quarantine ? ' ' + badge('warn', '隔離') : '')), r.expires_on, days(r.daysLeft),
       html(`<span class="badges">${badge(r.status, r.statusLabel)}${r.allocatable ? badge('ok', '出荷できる') : badge('', '出荷不可・' + invReason(r))}</span>`), num(r.qty),
       html(`<button type="button" class="btn btn-secondary btn-sm" data-action="openDispose" data-lot-id="${r.lot_id}" data-loc-id="${r.location_id}" data-lot="${esc(r.lot_no)}" data-loc="${esc(r.location)}" data-qty="${r.qty}" data-status="${esc(r.status)}" data-ok="${r.allocatable ? 1 : ''}" aria-label="${esc(r.lot_no)}（${esc(r.location)}）を処分">処分</button>`)] })),
-    { empty: S.inventory.length || preset || terms.length ? 'この条件に一致する在庫はありません' : '在庫はありません' });
-  if (!rows.length && (preset || terms.length || avail)) {
+    { empty: S.inventory.length || preset || sc || terms.length ? 'この条件に一致する在庫はありません' : '在庫はありません' });
+  if (!rows.length && (preset || sc || terms.length || avail)) {
     $('invBody').insertAdjacentHTML('beforeend', '<div class="empty-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="clearInvAll">絞り込みを解除</button></div>');
   } else if (!S.inventory.length) { // まだ在庫が無い：入荷から始める
     $('invBody').insertAdjacentHTML('beforeend', `<p class="note center">入荷を登録して検品で合格にすると、ここに在庫が表示されます。</p><div class="empty-actions">${goBtn('receipt', '入荷を登録する')}</div>`);
@@ -2171,6 +2184,11 @@ async function loadRecalls(exceptId) {
   $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
   restoreTargetForms(snap);
+  if (S.recallJump) { // ダッシュボードの「開く」から来た：その案件へ
+    const a = $('rclList').querySelector(`article[data-id="${CSS.escape(String(S.recallJump))}"]`);
+    S.recallJump = null;
+    if (a) { a.scrollIntoView({ block: 'start' }); focusTo(a); }
+  }
 }
 
 function recallTotals(r) {
@@ -2213,7 +2231,7 @@ function renderRecall(r) {
     <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recQty >= r.shippedQty ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>
       <div class="stat"><b>${fmt(r.remainingStock)}</b><span>残在庫</span></div></div>
     ${r.activeTargets ? `<div class="meter-row"><div class="meter"><i data-w="${r.recoveredRate}"></i></div><span>回収 ${fmt(r.recQty)} / ${fmt(r.shippedQty)}${r.unrecQty ? `（回収不能 ${fmt(r.unrecQty)}）` : ''}</span></div>` : ''}
-    ${r.remainingStock > 0 ? `<div class="alert alert-warn" role="status"><div class="alert-text">回収対象ロットの在庫 ${fmt(r.remainingStock)} がまだ処分されていません${ed ? '（回収を完了する前に、廃棄・仕入先返品を記録してください）' : ''}。<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-q="${esc(r.lots.join(' '))}">在庫照会で処分する</button></div></div></div>` : ''}
+    ${r.remainingStock > 0 ? `<div class="alert alert-warn" role="status"><div class="alert-text">回収対象ロットの在庫 ${fmt(r.remainingStock)} がまだ処分されていません${ed ? '（回収を完了する前に、廃棄・仕入先返品を記録してください）' : ''}。<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-lots="${esc(r.lots.join(','))}" data-label="${esc('回収 ' + r.recall_no + ' の対象ロット')}">在庫照会で処分する</button></div></div></div>` : ''}
     <h3 class="section-title">対象顧客</h3>${targets}
     ${ed ? `<p class="note">回収品の受入は「返品登録」で行うと回収数に自動で反映されます。</p>
       <div class="form-actions"><button type="button" class="btn btn-secondary" data-action="reextract" data-id="${r.id}">${icon('refresh')}対象を再抽出</button>
@@ -2545,7 +2563,7 @@ async function saveMasterForm(e) {
     if (t === 'm_location' && qty > 0) {
       fieldErr($('mf_is_active'), '在庫がある保管場所は無効にできません');
       alertBox('masterMsg', `この保管場所には在庫 ${fmt(qty)} があります。出荷・処分などで在庫を 0 にしてから無効にしてください。`, 'ng', true,
-        `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-q="${esc(S.masterOrig.name || '')}">在庫照会を開く</button>`);
+        `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-loc="${esc(String(data.id))}" data-label="${esc('保管場所 ' + (S.masterOrig.name || ''))}">在庫照会を開く</button>`);
       $('mf_is_active').focus();
       return;
     }
@@ -2633,7 +2651,7 @@ async function saveRule(chk, isUndo) {
 // イベント
 // ======================================================================
 const ACTIONS = {
-  go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
+  go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; S.invScope = null; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
   openSheet, closeSheet: () => closeSheet(true),
   logout: async () => {
     closeSheet();
@@ -2680,15 +2698,21 @@ const ACTIONS = {
   goInv: (el) => {
     if (el.matches('tr')) S.backFocus = { page: S.page, sel: `tr[data-action="goInv"][data-q="${CSS.escape(el.dataset.q || '')}"]` };
     S.invPreset = el.dataset.preset === 'lots' ? '' : el.dataset.preset;
+    // 対象をはっきり決めた絞り込み（回収の対象ロット・保管場所・商品）。文字の部分一致で別のものまで出さないように
+    S.invScope = el.dataset.lots || el.dataset.loc || el.dataset.prod
+      ? { lots: el.dataset.lots ? el.dataset.lots.split(',') : null, loc: el.dataset.loc || null, prod: el.dataset.prod || null, label: el.dataset.label || '' } : null;
+    // アプリが案内したボタンなので、開いているマスタ編集は確認なしで閉じる
+    if ($('masterDialog').open) { $('masterForm').dataset.dirty = ''; $('masterDialog').close('cancel'); }
     alertBox('invMsg', '');
-    $('invFilter').value = el.dataset.q || '';
+    $('invFilter').value = S.invScope ? '' : el.dataset.q || '';
     $('invAvail').checked = false;
     go('inventory');
   },
+  openRecall: (el) => { S.recallJump = el.dataset.id; go('recall'); }, // 選んだ回収案件まで移動して開く
   retrace: () => $('tlSearch').requestSubmit(),
   retraceCustomer: () => $('tcSearch').requestSubmit(),
-  clearInvAll: () => { S.invPreset = ''; $('invFilter').value = ''; $('invAvail').checked = false; alertBox('invMsg', ''); renderInventory(); focusTo($('invFilter')); },
-  clearInvPreset: () => { S.invPreset = ''; renderInventory(); focusTo($('invFilter')); },
+  clearInvAll: () => { S.invPreset = ''; S.invScope = null; $('invFilter').value = ''; $('invAvail').checked = false; alertBox('invMsg', ''); renderInventory(); focusTo($('invFilter')); },
+  clearInvPreset: () => { S.invPreset = ''; S.invScope = null; renderInventory(); focusTo($('invFilter')); },
   newReturn: async () => {
     if (unsavedScreens().includes('返品登録') && !(await ask({ title: '入力中の返品内容を閉じますか？', body: `出荷 ${S.rtNo} の返品は、まだ登録していません。「戻る」で開き直すと、入力した内容を戻せます。`, okText: '閉じる', danger: true }))) return;
     $('rtShipNo').value = ''; $('rtShipNo').removeAttribute('aria-invalid'); $('rtShipment').innerHTML = ''; alertBox('rtFindMsg', ''); alertBox('rtMsg', ''); $('rtForm').hidden = true; S.returnLine = null; S.rtNo = '';

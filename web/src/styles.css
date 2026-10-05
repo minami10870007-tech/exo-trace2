@@ -848,3 +848,4 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .toast-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
 .toast { pointer-events: none; } .toast button { pointer-events: auto; } /* お知らせの下の画面も押せるように（ボタンだけ押せる） */
 .unset { color: var(--text-3); font-weight: 400; }
+.loc-hint { margin-top: 8px; }

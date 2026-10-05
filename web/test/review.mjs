@@ -550,6 +550,13 @@ for (const vp of VIEWPORTS) {
     });
     if (r[0] < 2 || r[1] < 2) throw new Error('複数ロットで絞り込めない: ' + r);
     if (r[2] < 1) throw new Error('保管場所名で絞り込めない');
+    // 回収の対象ロット（在庫が0のロットを含む）を指定して開く
+    const n = await page.evaluate(async () => {
+      const el = document.createElement('button'); el.dataset.preset = 'lots'; el.dataset.lots = S.inventory[0].lot_no + ',NO-STOCK-LOT-999'; el.dataset.label = 'テスト';
+      ACTIONS.goInv(el); await new Promise((r) => setTimeout(r, 1500));
+      const c = document.querySelectorAll('#invBody [data-action="openDispose"]').length; ACTIONS.clearInvAll(); return c;
+    });
+    if (n < 1) throw new Error('在庫0のロットを含む対象ロットで絞り込めない');
   });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);

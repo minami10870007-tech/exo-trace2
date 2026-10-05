@@ -1116,7 +1116,7 @@ begin
   end if;
 
   select * into v_lot from exo.t_lot
-  where supplier_id = v_supplier.id and product_id = v_product.id and supplier_lot_no = v_sup_lot for update;
+  where supplier_id = v_supplier.id and product_id = v_product.id and upper(supplier_lot_no) = upper(v_sup_lot) for update; -- 大文字・小文字の違いは同じ仕入先ロット
   if v_lot.id is not null then
     if v_lot.expires_on <> v_exp then
       perform exo.fail('仕入先ロット番号「' || v_sup_lot || '」は既に使用期限 ' || v_lot.expires_on || ' で登録されています。使用期限を確認してください。');
