@@ -490,7 +490,8 @@ function clearScreens() {
   $('rtForm').hidden = true;
   showResume(false);
   delete $('rcExp').dataset.manual;
-  Object.assign(S, { cfg: null, M: null, inventory: [], returnLine: null, inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product' });
+  Object.assign(S, { cfg: null, M: null, inventory: [], returnLine: null, inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product',
+    rtNo: '', returnLot: '', invPreset: '', backFocus: null, insReason: null, insFocusLot: '' });
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 
@@ -629,6 +630,7 @@ function route() {
   const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
   if (id) S.pageHash[id] = location.hash;
   const page = PAGES.find((p) => p.id === id) || PAGES[0];
+  if (page.id !== id) { history.replaceState(null, '', '#/' + page.id); S.lastHash = '#/' + page.id; } // 存在しない画面の URL は残さない
   showPage(page.id);
 }
 
@@ -952,6 +954,7 @@ async function loadDashboard() {
   $('dashSetup').innerHTML = setupCard();
   $('dashKpis').hidden = !setupState().lots; // まだロットが1件も無いときは「0」ばかりの表示を出さない
   $('dashSetup').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
+  if (!setupState().lots && !d.recalls.length) { $('dashBody').innerHTML = mismatch + stale; return; } // ロットが無いうちは空のカードを並べない（準備の案内に集中）
   $('dashBody').innerHTML = mismatch + stale +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
@@ -1334,7 +1337,7 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
       const s = await api('getShipmentByNo', asked);
       if ($('rtShipNo').value !== asked) return; // 待っている間に別の番号が入力されたら、古い結果で上書きしない
       if (s.shipment_no !== S.rtNo && !(await confirmLeave())) { $('rtShipNo').value = S.rtNo; $('rtShipNo').removeAttribute('aria-invalid'); return; }
-      const same = s.shipment_no === S.rtNo, keepForm = same ? captureReturnForm() : null; // 同じ出荷の検索し直しでは、入力中のフォームをそのまま残す
+      const same = s.shipment_no === S.rtNo, keepForm = same && !keepMsg ? captureReturnForm() : null; // 同じ出荷の検索し直しでは、入力中のフォームをそのまま残す
       if (!same && fromUrl && S.rtNo && unsavedScreens().includes('返品登録')) toast(`出荷 ${S.rtNo} の入力途中の内容は、「進む」で戻せます`);
       $('rtForm').hidden = true; S.returnLine = null; S.rtNo = s.shipment_no;
       $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
@@ -1359,6 +1362,7 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
         return;
       }
       $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null; S.rtNo = '';
+      $('rtShipNo').setAttribute('aria-invalid', 'true');
       if (S.page === 'return') setUrl('#/return', false);
       await loadReturnRecent().catch(() => {}); // 見つからないときは最近の出荷から選べるようにする
       alertBox('rtFindMsg', /一覧から選んで/.test(err.message) ? err.message : err.message + '\n出荷番号を確かめるか、下の「最近の出荷」から選んでください。', 'ng');
@@ -1528,6 +1532,7 @@ async function submitReturn(e) {
         (r.recall ? goBtn('recall', '回収案件を開く') : ''));
       $('rtReason').value = '';
       writeDraft(S.rtNo, null);
+      $('rtForm').hidden = true; S.returnLine = null; $('rtQty').value = ''; // 登録済みの内容はフォームに残さない（二重登録を防ぐ）
       await findShipmentForReturn(null, true, true);
       $('rtFindMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       focusTo($('rtFindMsg').firstElementChild);
@@ -1666,7 +1671,7 @@ async function submitDispose(e) {
         }
         $('dpQty').setAttribute('aria-invalid', 'true'); // 入力した数量はそのまま残し、最新の上限（ヒント）と見比べて直せるようにする
         $('dpQty').focus();
-        alertBox('dpMsg', `他の利用者の出荷・処分などで、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng');
+        alertBox('dpMsg', `他の利用者の出荷・処分などで、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng', true);
         return;
       }
       alertBox('dpMsg', err.message, 'ng');
@@ -2261,7 +2266,12 @@ const ACTIONS = {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
   addLine, removeLine: (el) => { el.closest('.line').remove(); if (!$('shLines').children.length) addLine(); },
-  changeStatus, cancelShip, selectReturnLine: (el) => selectReturnLine(el), cancelReturn,
+  changeStatus, cancelShip, selectReturnLine: async (el) => {
+    // 入力中の明細から別の明細に切り替えるときは確認する（数量・理由は消える）
+    if (S.returnLine && S.returnLine !== el.dataset.id && unsavedScreens().includes('返品登録')
+      && !(await ask({ title: '入力中の返品内容を破棄しますか？', body: '別の明細を選ぶと、入力した数量・理由は消えます。', okText: '破棄して選ぶ', danger: true }))) return;
+    selectReturnLine(el);
+  }, cancelReturn,
   saveTarget, reextract, closeRecall,
   newMaster: () => editMaster(null),
   editMaster: (el) => editMaster(el.dataset.id),

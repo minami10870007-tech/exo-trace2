@@ -450,7 +450,12 @@ for (const vp of VIEWPORTS) {
     await page.click('[data-action="cancelReturn"]');
     await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
     if (await page.inputValue('#rtReason')) throw new Error('キャンセル後も前の理由が残っている');
-    await page.click('[data-action="cancelReturn"]');
+    // 一部だけ返品して登録 → フォームは閉じ、未保存扱いにならない
+    await page.fill('#rtQty', '1'); await page.fill('#rtReason', 'テスト返品');
+    if (!(await page.inputValue('#rtDisp')) && !(await page.isDisabled('#rtDisp'))) await page.selectOption('#rtDisp', 'DISPOSE');
+    await page.click('#rtForm button[type="submit"]'); await waitText('#rtFindMsg', /返品を登録しました/); await idle(page);
+    if (!(await page.isHidden('#rtForm'))) throw new Error('登録後もフォームが開いたまま');
+    if ((await page.evaluate(() => unsavedScreens())).length) throw new Error('登録後に未保存扱いになる');
   });
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
