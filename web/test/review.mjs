@@ -480,6 +480,39 @@ for (const vp of VIEWPORTS) {
     if (n !== '1') throw new Error('入荷が ' + n + ' 件登録された');
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
+  await step('出荷：全量を出荷して応答が届かなくても、もう一度確定でき二重に出荷しない', async () => {
+    await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
+    // 販売でき、在庫のある 顧客×商品 を探す
+    const custs = await page.$$eval('#shCustomer option', (o) => o.map((x) => x.value).filter(Boolean));
+    let qty = 0;
+    for (const c of custs) {
+      await page.selectOption('#shCustomer', c);
+      const prods = await page.$$eval('.slProd option', (o) => o.map((x) => x.value).filter(Boolean));
+      for (const pr of prods) {
+        await page.selectOption('.slProd', pr); await page.waitForTimeout(100);
+        const t = await page.textContent('.line-avail'); const m = t.match(/^引当可能 (\d+)/);
+        if (m && Number(m[1]) > 0 && !/販売できません/.test(t)) { qty = Number(m[1]); break; }
+      }
+      if (qty) break;
+    }
+    if (!qty) throw new Error('出荷できる組み合わせがない');
+    await page.fill('.slQty', String(qty)); await page.fill('#shNote', 'DUP-SHIP-TEST');
+    if (!(await page.inputValue('.slPrice'))) await page.fill('.slPrice', '100');
+    let lost = true; globalThis.EXPECT_NET_ERR = true;
+    await page.route('**/rpc/create_shipment', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
+    try {
+      await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /登録できたか確認できませんでした/);
+      await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk');
+      await page.waitForFunction(() => /出荷を確定しました/.test(document.getElementById('shDone').textContent), null, { timeout: 15000 })
+        .catch(async () => { throw new Error('再送できない: ' + (await page.textContent('#shMsg'))); });
+    } finally { await page.unroute('**/rpc/create_shipment'); globalThis.EXPECT_NET_ERR = false; }
+    const n = psql(server.sb.db, "select count(*) from exo.t_shipment where note = 'DUP-SHIP-TEST'");
+    if (n !== '1') throw new Error('出荷が ' + n + ' 件登録された');
+    // 後のテストのため取り消して在庫を戻す
+    const no = await page.getAttribute('#shDone [data-no]', 'data-no');
+    await page.click(`#shRecent [data-action="cancelShip"][data-no="${no}"]`); await page.fill('#dialogInput', 'テスト取消').catch(() => {}); await page.click('#dialogOk'); await idle(page);
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);

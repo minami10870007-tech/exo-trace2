@@ -87,7 +87,7 @@ async function sbFetch(path, body, token) {
     throw new Error(MSG_OFFLINE);
   } finally { clearTimeout(timer); }
   let data = {};
-  try { const text = await res.text(); data = text ? JSON.parse(text) : {}; } catch (e) { /* 空応答 */ }
+  try { const text = await res.text(); data = text ? JSON.parse(text) : {}; } catch (e) { data = { __unreadable: true }; } // 応答が途中で切れた
   return { res, data };
 }
 
@@ -174,22 +174,27 @@ function newId() {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 S.req = {};
+S.unsure = {}; // 登録できたか分からないまま終わったフォーム（再送は画面側のチェックを省いてサーバーに任せる）
 /** フォームの内容が変わったら、次の確定は新しい依頼として送る */
-function resetRequest(formId) { delete S.req[formId]; }
+function resetRequest(formId) { delete S.req[formId]; delete S.unsure[formId]; }
+/** 前回の確定が「登録できたか分からない」まま、内容を変えずに再送しようとしているか */
+const resending = (formId) => !!(S.unsure[formId] && S.req[formId]);
 
 async function api(fn, ...args) {
   const p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
   const form = WRITE_FORM[fn];
   if (form) p.requestId = S.req[form] || (S.req[form] = newId());
   const online = navigator.onLine;
+  let sent = false;
   const path = '/rest/v1/rpc/' + fn.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
   progress(1);
   try {
     await ensureSession();
-    const sent = S.sess.access_token;
-    let { res, data } = await sbFetch(path, { p }, sent);
+    const tok = S.sess.access_token;
+    sent = true;
+    let { res, data } = await sbFetch(path, { p }, tok);
     if (res.status === 401) {
-      await ensureSession(sent);
+      await ensureSession(tok);
       ({ res, data } = await sbFetch(path, { p }, S.sess.access_token));
     }
     if (res.status === 401) { logout(MSG_EXPIRED_KEEP, true); throw new Error(MSG_EXPIRED); }
@@ -197,11 +202,15 @@ async function api(fn, ...args) {
     if (res.status === 403 && /利用権限|ログインしてください/.test(data.message || '')) { logout(data.message); throw new Error(data.message); }
     if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
     if (!res.ok) throw rpcError(res, data);
+    if (form && data && data.__unreadable) throw new Error(MSG_OFFLINE); // 応答の途中で切れた：登録できたか分からない
     if (form) resetRequest(form); // 登録できた：次は新しい依頼
     return data;
   } catch (err) {
     // 登録の依頼を送ったあとで通信が切れた：登録されたかどうか分からないので、そう伝える（同じ依頼番号で再送すれば安全）
-    if (form && online && err.message === MSG_OFFLINE) throw new Error(MSG_UNSURE);
+    if (form && online && sent && err.message === MSG_OFFLINE) {
+      S.unsure[form] = true;
+      throw Object.assign(new Error(MSG_UNSURE), { unsure: true });
+    }
     throw err;
   } finally {
     progress(-1);
@@ -1342,14 +1351,15 @@ async function submitShipment(e) {
     return;
   }
   // 販売可否ルール（確認ダイアログの前に止める）。止まりそうなら、他の利用者がルールを変えていないか最新を読んでから判定する
-  if (lineEls.some((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value))) {
+  const again = resending('shipForm'); // 前回の確定が届いたか分からない：在庫・販売可否の判定はサーバーに任せて、そのまま送る
+  if (!again && lineEls.some((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value))) {
     const gone = await freshMasters(true);
     if (gone && gone.shMsg.length) { // 最新にしたら選択を外した項目がある：その案内を出して止める（他のエラーで上書きしない）
       const el = $('shipForm').querySelector('[aria-invalid="true"]'); if (el) el.focus();
       return;
     }
   }
-  const ng = lineEls.find((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value));
+  const ng = !again && lineEls.find((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value));
   if (ng) {
     const el = ng.querySelector('.slProd');
     el.setAttribute('aria-invalid', 'true');
@@ -1360,7 +1370,7 @@ async function submitShipment(e) {
   // 引当可能数を超える明細（同じ商品の合計で判定）
   const want = {};
   lines.filter((l) => l.productId).forEach((l) => { want[l.productId] = (want[l.productId] || 0) + Number(l.quantity); });
-  const shortP = Object.keys(want).find((pid) => { const n = availFor(pid); return n !== null && S.inventory.length && want[pid] > n; });
+  const shortP = again ? null : Object.keys(want).find((pid) => { const n = availFor(pid); return n !== null && S.inventory.length && want[pid] > n; });
   if (shortP) {
     const el = lineEls.find((l) => l.querySelector('.slProd').value === shortP).querySelector('.slQty');
     el.setAttribute('aria-invalid', 'true');
@@ -1411,6 +1421,7 @@ async function submitShipment(e) {
         return;
       }
       alertBox('shMsg', err.message, 'ng');
+      if (err.unsure) { loadRecentShipments().catch(() => {}); return; } // 引当可能数は前回分が引かれて見えるので更新しない（再送が止まらないように）
       loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach((l) => updateLineAvail(l))).catch(() => {}); // 引当可能数を最新に
     }
   });
@@ -1720,7 +1731,7 @@ async function submitReturn(e) {
   e.preventDefault();
   if (!checkRequired($('rtForm'), 'rtMsg')) return;
   const q = Number($('rtQty').value);
-  if (!Number.isInteger(q) || q < 1 || q > Number($('rtQty').max)) {
+  if (!Number.isInteger(q) || q < 1 || (q > Number($('rtQty').max) && !resending('rtForm'))) {
     $('rtQty').setAttribute('aria-invalid', 'true');
     alertBox('rtMsg', `返品数量は 1〜${fmt($('rtQty').max)} の整数で入力してください。`, 'ng', true);
     fieldErr($('rtQty'), `1〜${fmt($('rtQty').max)} の整数で入力してください`);
@@ -1841,7 +1852,10 @@ async function openDispose(btn) {
   if (btn.dataset.ok && !(await ask({ title: '出荷できる在庫を処分しますか？', body: `ロット ${btn.dataset.lot} は合格済みで出荷できる在庫です。破損などで処分する場合だけ続けてください。`, okText: '処分の記録へ進む', danger: true }))) return;
   const f = $('disposeForm');
   f.dataset.dirty = '';
-  resetRequest('disposeForm'); // 別の在庫の処分は別の依頼
+  // 別の在庫の処分は別の依頼。前回が「登録できたか分からない」まま同じ在庫を開き直したときは、同じ依頼として送る（二重に記録しない）
+  const key = btn.dataset.lotId + ':' + btn.dataset.locId;
+  if (!(resending('disposeForm') && f.dataset.key === key)) resetRequest('disposeForm');
+  f.dataset.key = key;
   f.dataset.status = btn.dataset.status;
   f.reset();
   f.dataset.lotId = btn.dataset.lotId;
@@ -1863,7 +1877,7 @@ async function submitDispose(e) {
   e.preventDefault();
   const f = $('disposeForm');
   if (!checkRequired(f, 'dpMsg')) return;
-  if (Number($('dpQty').value) > Number($('dpQty').max) || Number($('dpQty').value) < 1 || !Number.isInteger(Number($('dpQty').value))) {
+  if ((Number($('dpQty').value) > Number($('dpQty').max) && !resending('disposeForm')) || Number($('dpQty').value) < 1 || !Number.isInteger(Number($('dpQty').value))) {
     $('dpQty').setAttribute('aria-invalid', 'true');
     alertBox('dpMsg', `数量は 1〜${fmt($('dpQty').max)} の整数で入力してください。`, 'ng', true);
     $('dpQty').focus();
@@ -2478,6 +2492,12 @@ const ACTIONS = {
   dialogCancel: async (el) => {
     const dlg = el.closest('dialog');
     const form = dlg.querySelector('form');
+    if (dlg.id === 'disposeDialog' && S.unsure.disposeForm) { // 記録できたか分からないまま閉じる：在庫を最新にして確かめてもらう
+      dlg.close('cancel');
+      await loadInventory().catch(() => {});
+      alertBox('invMsg', '処分を記録できたか確認できませんでした。在庫照会の数量が減っていれば記録済みです。減っていなければ、もう一度「処分」から記録してください。', 'warn');
+      return;
+    }
     if (form && form.dataset.dirty === '1' && dlg.id !== 'dialog') {
       if (!(await ask({ title: '入力内容を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true }))) return;
     }
@@ -2539,6 +2559,7 @@ const ACTIONS = {
   addLine, removeLine: (el) => {
     const line = el.closest('.line'), prev = line.previousElementSibling;
     line.remove();
+    resetRequest('shipForm'); // 明細が変わったので、次の確定は新しい依頼
     if (!$('shLines').children.length) { addLine(true); $('shLines').firstElementChild.dataset.cleared = '1'; } // 自分で消したので、自動では選び直さない
     // 削除したあとのフォーカス：前の明細の商品、無ければ最初の明細の商品
     (prev || $('shLines').firstElementChild).querySelector('.slProd').focus();
