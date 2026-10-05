@@ -547,10 +547,11 @@ async function reloadMasters() {
   const prod = active(S.M.products);
   $('rcSupplier').innerHTML = options(active(S.M.suppliers), 'id', (r) => r.supplier_code + '　' + r.name, '選択してください');
   $('rcProduct').innerHTML = options(prod, 'id', (r) => r.product_code + '　' + r.name, '選択してください');
-  $('shCustomer').innerHTML = options(active(S.M.customers), 'id', (r) => r.customer_code + '　' + r.name + '（' + code('customer_type', r.customer_type) + '）', '選択してください');
+  $('shCustomer').innerHTML = options(active(S.M.customers), 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   $('tcCustomer').innerHTML = options(S.M.customers, 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   ['rcSupplier', 'rcProduct', 'shCustomer'].forEach((id) => { const o = $(id).options; if (o.length === 2 && !$(id).value) $(id).value = o[1].value; });
   fillReceiptLocations();
+  updateCustHint();
   renderPrereq();
   document.querySelectorAll('.slProd').forEach((sel) => {
     const v = sel.value;
@@ -782,18 +783,18 @@ function renderPrereq() {
 async function loadDashboard() {
   const d = await api('getDashboard');
   d.recalls.forEach(recallTotals);
-  const kpi = (label, n, page, level) =>
-    `<button type="button" class="kpi ${n ? (level ? 'is-' + level : '') : 'is-zero'}" data-action="go" data-page="${page}"><span>${esc(label)}${icon('chev', 'kpi-go')}</span><b>${n}</b></button>`;
+  const kpi = (label, n, page, level, preset) =>
+    `<button type="button" class="kpi ${n ? (level ? 'is-' + level : '') : 'is-zero'}" data-action="${preset ? 'goInv' : 'go'}" data-page="${page}"${preset ? ` data-preset="${preset}"` : ''}><span>${esc(label)}${icon('chev', 'kpi-go')}</span><b>${n}</b></button>`;
   $('dashKpis').innerHTML = kpi('検品待ち', d.quarantine.length, 'inspect', 'warn') + kpi('保留中', d.hold.length, 'inspect', 'warn') +
-    kpi('期限90日以内', d.expiringSoon.length, 'inventory', 'warn') + kpi('期限切れ在庫', d.expired.length, 'inventory', 'alert') +
-    kpi('発注点以下', d.lowStock.length, 'inventory', 'warn') + kpi('対応中の回収', d.recalls.length, 'recall', 'alert');
+    kpi('期限90日以内', d.expiringSoon.length, 'inventory', 'warn', 'expiring') + kpi('処分待ちの在庫', d.toDispose.length, 'inventory', 'alert', 'dispose') +
+    kpi('発注点以下', d.lowStock.length, 'inventory', 'warn', 'low') + kpi('対応中の回収', d.recalls.length, 'recall', 'alert');
 
   const lotRows = (list) => list.map((l) => ({ attrs: ` class="clickable${ALERT_STATUS.has(l.status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(l.lot_no)}" tabindex="0" aria-label="${esc(l.lot_no)} を追跡"`, cells: [html(mono(l.lot_no)), l.product, l.expires_on,
     days(l.daysLeft), html(badge(l.status, l.statusLabel)), num(l.stock)] }));
   const lotHead = [{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' }, { label: '残日数', cls: 'num' },
     { label: '状態', cls: 'status' }, { label: '在庫', cls: 'num' }];
   const recalls = d.recalls.length ? '<ul class="list">' + d.recalls.map((r) => `<li><div class="grow"><span class="eyebrow">${esc(r.recall_no)}</span><div class="t">${esc(r.title)}</div>
-      <div class="s">${r.activeTargets ? `対象顧客 ${r.activeTargets}件・連絡済 ${r.contactedRate}%・回収 ${fmt(r.doneQty)} / ${fmt(r.shippedQty)}` : '出荷実績のある顧客なし'}</div>
+      <div class="s">${r.activeTargets ? `対象顧客 ${r.activeTargets}件・連絡済 ${r.contactedRate}%・回収 ${fmt(r.recQty)} / ${fmt(r.shippedQty)}${r.unrecQty ? `（回収不能 ${fmt(r.unrecQty)}）` : ''}` : '出荷実績のある顧客なし'}</div>
       <div class="meter"><i data-w="${r.recoveredRate}"></i></div></div>
       <button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="recall">開く</button></li>`).join('') + '</ul>'
     : empty('対応中の回収案件はありません', 'check');
@@ -803,15 +804,18 @@ async function loadDashboard() {
     (lc.mismatches.length > 5 ? '\nほか ' + (lc.mismatches.length - 5) + ' 件' : '') + '\n管理者に確認してください。</div>' : '';
   const stale = d.checkStale ? `<div class="alert alert-warn span-full" role="status">日次チェック（期限切れの判定・在庫の照合）が24時間以上実行されていません${lc ? `（最終 ${esc(lc.ran_at)}）` : ''}。\nSupabase の「Integrations」→「Cron」に exo-trace-daily-check があるか、管理者に確認を依頼してください。</div>` : '';
   if (S.cfg) S.cfg.setup = d.setup;
+  S.lowProducts = d.lowStock.map((x) => x.product);
   $('dashSetup').innerHTML = setupCard();
   $('dashKpis').hidden = !setupState().lots; // まだロットが1件も無いときは「0」ばかりの表示を出さない
   $('dashSetup').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
   $('dashBody').innerHTML = mismatch + stale +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
-      d.lowStock.map((x) => ({ cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +
+      d.lowStock.map((x) => ({ attrs: ` class="clickable" data-action="goInv" data-preset="lots" data-q="${esc(x.product)}" tabindex="0" aria-label="${esc(x.product)} の在庫を見る"`, cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +
     `<div class="card span-full"><h2 class="card-title">使用期限90日以内の在庫</h2>${table(lotHead, lotRows(d.expiringSoon), { empty: '該当するロットはありません', emptyIcon: 'check' })}</div>` +
-    `<div class="card span-full"><h2 class="card-title">期限切れ在庫</h2><p class="card-sub">廃棄または仕入先返品で処分してください。</p>${table(lotHead, lotRows(d.expired), { empty: '期限切れの在庫はありません', emptyIcon: 'check' })}</div>`;
+    `<div class="card span-full"><div class="card-head"><div><h2 class="card-title">処分待ちの在庫</h2><p class="card-sub">回収・不合格・期限切れで出荷できない在庫です。在庫照会の「処分」から、廃棄または仕入先返品を記録してください。</p></div>
+      ${d.toDispose.length ? `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="dispose">在庫照会で処分する</button>` : ''}</div>
+      ${table(lotHead, lotRows(d.toDispose), { empty: '処分待ちの在庫はありません', emptyIcon: 'check' })}</div>`;
   $('dashBody').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
 }
 
@@ -1021,6 +1025,12 @@ function availFor(productId) {
   if (!p) return null;
   return S.inventory.filter((r) => r.allocatable && r.product_code === p.product_code).reduce((a, r) => a + r.qty, 0);
 }
+/** 出荷先の顧客区分を選択欄の下に出す（販売できる商品が区分で決まるため） */
+function updateCustHint() {
+  const c = S.M && S.M.customers.find((x) => String(x.id) === $('shCustomer').value);
+  $('shCustHint').textContent = c ? '顧客区分：' + code('customer_type', c.customer_type) : '';
+}
+
 /** 選んだ顧客に、その商品を販売できるか（販売可否ルール）。顧客未選択なら null */
 function saleBlocked(productId) {
   const c = S.M && S.M.customers.find((x) => String(x.id) === $('shCustomer').value);
@@ -1039,6 +1049,10 @@ function updateLineAvail(line) {
   const blocked = pid ? saleBlocked(pid) : null;
   out.textContent = blocked || (n === null ? '' : `引当可能 ${fmt(n)}`);
   out.classList.toggle('short', !!blocked || (n !== null && qty > n));
+  // 直したら赤い印とエラー表示を消す
+  if (!blocked) line.querySelector('.slProd').removeAttribute('aria-invalid');
+  if (!(n !== null && qty > n) && qty > 0) line.querySelector('.slQty').removeAttribute('aria-invalid');
+  if ($('shMsg').querySelector('.alert-ng') && ![...document.querySelectorAll('#shLines [aria-invalid="true"]')].length) alertBox('shMsg', '');
 }
 
 async function loadRecentShipments() {
@@ -1088,6 +1102,7 @@ async function findShipmentForReturn(e, keepMsg) {
           s.lines.map((l) => ({ attrs: rowAlert(l.lot_status_code), cells: [html(esc(l.product)), html(mono(l.lot_no)), html(badge(l.lot_status_code, l.lot_status)), num(l.quantity), num(l.returned), num(l.returnable),
             l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.in_open_recall ? 1 : ''}" data-storage="${esc(l.storage_class)}">この明細を返品</button>`) : ''] })));
       $('rtRecent').innerHTML = '';
+      if (!keepMsg) focusTo($('rtShipment').querySelector('.card-sub'));
     } catch (err) {
       $('rtShipment').innerHTML = '';
       alertBox('rtFindMsg', err.message, 'ng');
@@ -1115,11 +1130,22 @@ async function loadReturnRecent() {
     { empty: '返品できる出荷はありません', emptyIcon: 'truck' });
 }
 
+/** 返品の入力をやめる：選んだ明細を元に戻し、そのボタンにフォーカスを戻す */
+function cancelReturn() {
+  $('rtForm').hidden = true;
+  const sel = $('rtShipment').querySelector('[data-action="selectReturnLine"][data-id="' + S.returnLine + '"]');
+  S.returnLine = null;
+  $('rtShipment').querySelectorAll('tr.is-selected').forEach((tr) => tr.classList.remove('is-selected'));
+  $('rtShipment').querySelectorAll('[data-action="selectReturnLine"]').forEach((b) => { b.textContent = 'この明細を返品'; b.disabled = false; });
+  focusTo(sel || $('rtShipment'));
+}
+
 function selectReturnLine(btn) {
   S.returnLine = btn.dataset.id;
   document.querySelectorAll('#rtShipment tr.is-selected').forEach((tr) => tr.classList.remove('is-selected'));
   document.querySelectorAll('#rtShipment [data-action="selectReturnLine"]').forEach((b) => { b.textContent = 'この明細を返品'; b.disabled = false; });
   btn.closest('tr').classList.add('is-selected');
+  S.returnLot = (btn.dataset.label.split('／')[1] || '');
   btn.textContent = '選択中';
   btn.disabled = true;
   $('rtForm').hidden = false;
@@ -1153,7 +1179,10 @@ async function submitReturn(e) {
     try {
       const r = await api('registerReturn', { shipmentLineId: S.returnLine, quantity: $('rtQty').value, returnedOn: $('rtDate').value, reason: $('rtReason').value,
         quarantineLocationId: $('rtQLoc').value, disposition: $('rtDisp').value, restockLocationId: $('rtRLoc').value });
-      alertBox('rtFindMsg', `返品を登録しました。返品番号 ${r.returnNo}／処置：${r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄'}${r.recall ? '（回収品として計上）' : ''}`);
+      const lot = S.returnLot;
+      alertBox('rtFindMsg', `返品を登録しました。返品番号 ${r.returnNo}／処置：${r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄'}${r.recall ? '（回収品として計上）' : ''}`, 'ok', true,
+        `<button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の返品を登録</button>` +
+        (lot ? `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(lot)}">このロットを追跡</button>` : ''));
       $('rtReason').value = '';
       await findShipmentForReturn(null, true);
       $('rtFindMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1180,18 +1209,62 @@ function invReason(r) {
   return r.reason || '期限が近い';
 }
 
+const INV_PRESETS = {
+  expiring: { label: '期限90日以内', test: (r) => r.daysLeft !== null && r.daysLeft >= 0 && r.daysLeft <= 90 && ['RELEASED', 'HOLD', 'QUARANTINE'].includes(r.status) },
+  dispose: { label: '処分待ち（回収・不合格・期限切れ）', test: (r) => ['RECALLED', 'REJECTED', 'EXPIRED'].includes(r.status) || (r.daysLeft !== null && r.daysLeft < 0) },
+  low: { label: '発注点以下の商品', test: (r) => (S.lowProducts || []).includes(r.product) },
+};
+
 function renderInventory() {
   const q = $('invFilter').value.trim().toUpperCase();
   const avail = $('invAvail').checked;
-  const rows = S.inventory.filter((r) => (!avail || r.allocatable) &&
-    (!q || [r.product, r.product_code, r.lot_no, r.supplier_lot_no].some((v) => String(v || '').toUpperCase().includes(q))));
+  const preset = INV_PRESETS[S.invPreset];
+  $('invPreset').innerHTML = preset ? `<span class="preset-chip">絞り込み：${esc(preset.label)}<button type="button" class="icon-btn" data-action="clearInvPreset" aria-label="絞り込みを解除">${icon('x')}</button></span>` : '';
+  const terms = q.split(/\s+/).filter(Boolean);
+  const rows = S.inventory.filter((r) => (!avail || r.allocatable) && (!preset || preset.test(r)) &&
+    (!terms.length || terms.some((t) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no].some((v) => String(v || '').toUpperCase().includes(t)))));
   $('invBody').innerHTML = table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, '仕入先ロット', { label: '保管場所', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' },
-    { label: '残日数', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '数量', cls: 'num' }],
+    { label: '残日数', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '数量', cls: 'num' }, { label: '', cls: 'actions' }],
     rows.map((r) => ({ attrs: ` class="clickable${ALERT_STATUS.has(r.status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(r.lot_no)}" tabindex="0" aria-label="${esc(r.lot_no)} を追跡"`,
       cells: [html(mono(r.lot_no)), r.product, html(mono(r.supplier_lot_no)),
       html(esc(r.location) + (r.quarantine ? ' ' + badge('warn', '隔離') : '')), r.expires_on, days(r.daysLeft),
-      html(`<span class="badges">${badge(r.status, r.statusLabel)}${r.allocatable ? badge('ok', '出荷できる') : badge('', '出荷不可・' + invReason(r))}</span>`), num(r.qty)] })),
+      html(`<span class="badges">${badge(r.status, r.statusLabel)}${r.allocatable ? badge('ok', '出荷できる') : badge('', '出荷不可・' + invReason(r))}</span>`), num(r.qty),
+      html(`<button type="button" class="btn ${r.allocatable ? 'btn-ghost' : 'btn-secondary'} btn-sm" data-action="openDispose" data-lot-id="${r.lot_id}" data-loc-id="${r.location_id}" data-lot="${esc(r.lot_no)}" data-loc="${esc(r.location)}" data-qty="${r.qty}" aria-label="${esc(r.lot_no)}（${esc(r.location)}）を処分">処分</button>`)] })),
     { empty: S.inventory.length ? '条件に一致する在庫はありません' : '在庫はありません' });
+}
+
+/** 在庫の処分（廃棄・仕入先返品）ダイアログ */
+function openDispose(btn) {
+  const f = $('disposeForm');
+  f.reset();
+  f.dataset.lotId = btn.dataset.lotId;
+  f.dataset.locId = btn.dataset.locId;
+  f.querySelectorAll('[aria-invalid]').forEach((el) => el.removeAttribute('aria-invalid'));
+  alertBox('dpMsg', '');
+  $('disposeInfo').textContent = `ロット ${btn.dataset.lot}（${btn.dataset.loc}）の在庫 ${fmt(btn.dataset.qty)} から、処分した数量を記録します。記録すると在庫から差し引かれ、元に戻せません。`;
+  $('dpQty').max = btn.dataset.qty;
+  $('dpQtyHint').textContent = `最大 ${fmt(btn.dataset.qty)}`;
+  G_STATE.disposeOpener = btn;
+  $('disposeDialog').showModal();
+  $('dpKind').focus();
+}
+
+async function submitDispose(e) {
+  if (!e.submitter || e.submitter.value !== 'ok') return;
+  e.preventDefault();
+  const f = $('disposeForm');
+  if (!checkRequired(f, 'dpMsg')) return;
+  await busy(e.submitter, async () => {
+    try {
+      const r = await api('disposeStock', { lotId: f.dataset.lotId, locationId: f.dataset.locId, quantity: $('dpQty').value, kind: $('dpKind').value, reason: $('dpReason').value });
+      $('disposeDialog').close();
+      toast(`ロット ${r.lotNo} の ${fmt(r.quantity)} を${r.kind === 'DISPOSE' ? '廃棄' : '仕入先返品'}として記録しました`);
+      await loadInventory();
+      focusTo($('invBody'));
+    } catch (err) {
+      alertBox('dpMsg', err.message, 'ng');
+    }
+  });
 }
 
 // ======================================================================
@@ -1223,7 +1296,7 @@ async function searchLot(e) {
             <div class="stat"><b>${fmt(l.stock)}</b><span>現在庫</span></div><div class="stat"><b>${esc(l.daysLeft)}</b><span>期限まで（日）</span></div></div>
           <dl class="lot-meta"><div><dt>製造日</dt><dd>${esc(l.manufactured_on || '—')}</dd></div><div><dt>使用期限</dt><dd>${esc(l.expires_on)}</dd></div>
             <div><dt>初回入荷</dt><dd>${esc(l.received_on)}</dd></div><div><dt>原価単価</dt><dd>${fmt(l.unit_cost)} 円</dd></div></dl>
-          <div class="chips">${Object.keys(l.movementTotals).filter((k) => !k.startsWith('TRANSFER_')).map((k) => `<span class="chip">${esc(MOVE_LABEL[k] || k)} ${fmt(l.movementTotals[k])}</span>`).join('')}</div>
+          <div class="chips">${Object.keys(l.movementTotals).filter((k) => !k.startsWith('TRANSFER_')).map((k) => `<span class="chip">${esc(MOVE_LABEL[k] || k)} ${fmt(Math.abs(l.movementTotals[k]))}</span>`).join('')}</div>
           <h3 class="section-title">販売先</h3>
           ${table([{ label: '顧客', cls: 'primary' }, { label: '連絡先', cls: 'wide' }, '出荷番号', { label: '出荷日', cls: 'nowrap' }, { label: '状態', cls: 'status' },
             { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '回収', cls: 'num' }, { label: '手元', cls: 'num' }],
@@ -1249,19 +1322,30 @@ async function searchLot(e) {
 // ======================================================================
 async function searchCustomer(e) {
   e.preventDefault();
+  alertBox('tcMsg', '');
+  if (!checkRequired($('tcSearch'), 'tcMsg')) return;
+  if ($('tcFrom').value && $('tcTo').value && $('tcFrom').value > $('tcTo').value) {
+    $('tcTo').setAttribute('aria-invalid', 'true');
+    alertBox('tcMsg', '出荷日の「まで」は「から」以降の日付にしてください。', 'ng', true);
+    $('tcTo').focus();
+    return;
+  }
   await busy(e.submitter, async () => {
     try {
       const r = await api('traceCustomer', $('tcCustomer').value, $('tcFrom').value, $('tcTo').value);
       const c = r.customer;
       const total = r.rows.reduce((s, x) => s + x.net, 0);
       $('tcBody').innerHTML = `<div class="card"><div class="card-head"><div><h2 class="card-title">${esc(c.name)}</h2>
-          <p class="card-sub">${joinNw([c.customer_code, code('customer_type', c.customer_type), c.address, c.phone, c.email])}</p></div>
+          <p class="card-sub">${joinNw([c.customer_code, code('customer_type', c.customer_type), c.address])}</p>
+          <div class="card-sub contacts">${[telLink(c.phone), mailLink(c.email)].filter(Boolean).map((v) => `<span class="contact">${v}</span>`).join('')}</div></div>
           <span class="badge b-CONTACTED">手元 ${fmt(total)}</span></div>
         ${table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, { label: '出荷日', cls: 'nowrap' }, '出荷番号', { label: '使用期限', cls: 'nowrap' },
           { label: 'ロット状態', cls: 'status' }, { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '手元', cls: 'num' }],
           r.rows.map((x) => ({ attrs: rowAlert(x.lot_status), cells: [html(mono(x.lot_no)), x.product, x.shipped_on, html(mono(x.shipment_no)),
             x.expires_on, html(badge(x.lot_status, x.lot_status_label)), num(x.quantity), num(x.returned), num(x.net)] })),
           { empty: '出荷実績はありません', emptyIcon: 'truck' })}</div>`;
+      $('tcBody').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      focusTo($('tcBody').querySelector('.card-title'));
     } catch (err) {
       $('tcBody').innerHTML = `<div class="alert alert-ng" role="alert">${esc(err.message)}</div>`;
     }
@@ -1285,6 +1369,8 @@ function recallTotals(r) {
   const act = r.targets.filter((t) => Number(t.shipped_qty) > 0);
   r.activeTargets = act.length;
   r.shippedQty = act.reduce((a, t) => a + Number(t.shipped_qty), 0);
+  r.recQty = act.reduce((a, t) => a + Math.min(Number(t.shipped_qty), Number(t.recovered_qty)), 0);
+  r.unrecQty = act.reduce((a, t) => a + Number(t.unrecoverable_qty), 0);
   r.doneQty = act.reduce((a, t) => a + Math.min(Number(t.shipped_qty), Number(t.recovered_qty) + Number(t.unrecoverable_qty)), 0);
   r.openTargets = r.targets.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED').length;
   r.uncontacted = r.targets.filter((t) => t.status === 'NOT_CONTACTED').length;
@@ -1308,7 +1394,7 @@ function renderRecall(r) {
     const contacts = [t.contact_name ? esc(t.contact_name) : '', telLink(t.phone), mailLink(t.email)].filter(Boolean);
     return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
         <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div></div>${badge(t.status, t.statusLabel)}</div>
-      <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span>出荷 <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty))}</b></span></div>
+      <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span></div>
       ${form}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
@@ -1316,9 +1402,10 @@ function renderRecall(r) {
       <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : '', '対象ロット ' + r.lots.join(', ')])}</p></div>
       ${badge(r.status, RECALL_STATUS[r.status] || r.status)}</div>
     <p class="note">${esc(r.reason)}</p>
-    <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recoveredRate >= 100 ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>
+    <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recQty >= r.shippedQty ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>
       <div class="stat"><b>${fmt(r.remainingStock)}</b><span>残在庫</span></div></div>
-    ${r.activeTargets ? `<div class="meter-row"><div class="meter"><i data-w="${r.recoveredRate}"></i></div><span>回収 ${fmt(r.doneQty)} / ${fmt(r.shippedQty)}</span></div>` : ''}
+    ${r.activeTargets ? `<div class="meter-row"><div class="meter"><i data-w="${r.recoveredRate}"></i></div><span>回収 ${fmt(r.recQty)}${r.unrecQty ? `・回収不能 ${fmt(r.unrecQty)}` : ''} / ${fmt(r.shippedQty)}</span></div>` : ''}
+    ${!ed && r.remainingStock > 0 ? `<div class="alert alert-warn" role="status"><div class="alert-text">回収対象ロットの在庫 ${fmt(r.remainingStock)} がまだ処分されていません。<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-q="${esc(r.lots.join(' '))}">在庫照会で処分する</button></div></div></div>` : ''}
     <h3 class="section-title">対象顧客</h3>${targets}
     ${ed ? `<p class="note">回収品の受入は「返品登録」で行うと回収数に自動で反映されます。</p>
       <div class="form-actions"><button type="button" class="btn btn-secondary" data-action="reextract" data-id="${r.id}">${icon('refresh')}対象を再抽出</button>
@@ -1339,6 +1426,7 @@ async function submitRecall(e) {
       $('recallForm').reset();
       $('rcNew').open = false;
       await loadRecalls();
+      focusTo($('rclList').firstElementChild);
     } catch (err) {
       alertBox('rclFormMsg', err.message, 'ng');
     }
@@ -1379,14 +1467,15 @@ async function reextract(btn) {
 async function closeRecall(btn) {
   const open = Number(btn.dataset.open || 0);
   const body = open ? `未完了の対象顧客が ${open} 件（未回収 ${btn.dataset.left}・未連絡 ${btn.dataset.uncontacted} 件）残っているため、まだ完了できません。\n\n各顧客について、回収品を「返品登録」で受け入れる（自動で「回収済」になります）か、回収できない場合は「進捗を更新」で回収不能数を入れるかクローズしてください。`
-    : (Number(btn.dataset.stock) > 0 ? `回収対象ロットの在庫 ${fmt(btn.dataset.stock)} が、まだ処分されていません（在庫照会で確認できます）。廃棄などの処分を済ませてから完了することをおすすめします。\n\n` : '') +
+    : (Number(btn.dataset.stock) > 0 ? `回収対象ロットの在庫 ${fmt(btn.dataset.stock)} が、まだ処分されていません（在庫照会で確認できます）。在庫照会の「処分」から廃棄・仕入先返品を記録してから完了することをおすすめします。\n\n` : '') +
       '完了後は対象顧客の進捗を変更できません。';
   if (open) { await ask({ title: '回収はまだ完了できません', body, okText: 'わかりました', noCancel: true }); return; }
   if (!(await ask({ title: Number(btn.dataset.stock) > 0 ? '未処分の在庫がありますが、完了しますか？' : '回収を完了しますか？', body, okText: '完了にする' }))) return;
   await busy(btn, async () => {
     try {
       const r = await api('closeRecall', btn.dataset.id);
-      toast('回収案件を完了しました' + (r.warning ? '（' + r.warning + '）' : ''));
+      $('toasts').innerHTML = '';
+      toast('回収案件 ' + r.recall_no + ' を完了しました');
       await loadRecalls();
       focusTo($('rclList').firstElementChild);
     } catch (err) { toast(err.message, 'ng'); }
@@ -1482,6 +1571,7 @@ function editMaster(id) {
   const r = id ? S.M[def.key].find((x) => String(x.id) === String(id)) : { is_active: true, min_remaining_days: 90 };
   $('masterTitle').textContent = def.label + (id ? 'の編集' : 'の新規登録');
   $('masterForm').dataset.id = id || '';
+  $('masterForm').dataset.dirty = '';
   alertBox('masterMsg', '');
   const isCode = (k) => k.endsWith('_code') && k !== 'medical_inst_code';
   $('masterFields').innerHTML = def.fields.map(([k, label, type]) => {
@@ -1506,7 +1596,12 @@ function editMaster(id) {
 }
 
 async function saveMasterForm(e) {
-  if (!e.submitter || e.submitter.value !== 'save') return; // キャンセル・閉じるはそのまま閉じる
+  if (e.submitter && e.submitter.value === 'cancel' && $('masterForm').dataset.dirty === '1') {
+    e.preventDefault();
+    if (await ask({ title: '変更を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('masterDialog').close();
+    return;
+  }
+  if (!e.submitter || e.submitter.value !== 'save') return; // 変更が無ければキャンセル・閉じるはそのまま閉じる
   e.preventDefault();
   const t = S.masterTable, data = { id: $('masterForm').dataset.id || null };
   if (!checkRequired($('masterFields'), 'masterMsg')) return;
@@ -1550,7 +1645,7 @@ async function saveRule(chk, isUndo) {
 // イベント
 // ======================================================================
 const ACTIONS = {
-  go: (el) => go(el.dataset.page),
+  go: (el) => { if (el.dataset.page === 'inventory') S.invPreset = ''; go(el.dataset.page); },
   openSheet, closeSheet,
   logout: () => logout(''),
   retry,
@@ -1564,7 +1659,19 @@ const ACTIONS = {
     el.setAttribute('aria-pressed', String(show));
   },
   goMaster: (el) => { S.masterTable = el.dataset.table; go('master'); },
-  pickReturnShipment: (el) => { $('rtShipNo').value = el.dataset.no; $('rtShipNo').removeAttribute('aria-invalid'); findShipmentForReturn(null, false); },
+  openDispose,
+  goInv: (el) => {
+    S.invPreset = el.dataset.preset === 'lots' ? '' : el.dataset.preset;
+    $('invFilter').value = el.dataset.q || '';
+    $('invAvail').checked = false;
+    go('inventory');
+  },
+  clearInvPreset: () => { S.invPreset = ''; renderInventory(); focusTo($('invFilter')); },
+  newReturn: () => {
+    $('rtShipNo').value = ''; $('rtShipment').innerHTML = ''; alertBox('rtFindMsg', ''); $('rtForm').hidden = true;
+    loadReturnRecent().then(() => focusTo($('rtShipNo'))).catch((err) => toast(err.message, 'ng'));
+  },
+  pickReturnShipment: (el) => { $('rtShipNo').value = el.dataset.no; $('rtShipNo').removeAttribute('aria-invalid'); alertBox('rtFindMsg', ''); findShipmentForReturn(null, false); },
   traceLotNo: (el) => { go('traceLot'); $('tlQuery').value = el.dataset.lot; $('tlQuery').removeAttribute('aria-invalid'); $('tlSearch').requestSubmit(); },
   confirmRules: async (el) => busy(el, async () => {
     try {
@@ -1592,7 +1699,7 @@ const ACTIONS = {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
   addLine, removeLine: (el) => { el.closest('.line').remove(); if (!$('shLines').children.length) addLine(); },
-  changeStatus, cancelShip, selectReturnLine, cancelReturn: () => { $('rtForm').hidden = true; },
+  changeStatus, cancelShip, selectReturnLine, cancelReturn,
   saveTarget, reextract, closeRecall,
   newMaster: () => editMaster(null),
   editMaster: (el) => editMaster(el.dataset.id),
@@ -1630,6 +1737,7 @@ document.addEventListener('change', (e) => {
   } else if (t.classList.contains('ruleChk')) {
     saveRule(t);
   } else if (t.id === 'shCustomer') {
+    updateCustHint();
     document.querySelectorAll('#shLines .line').forEach(updateLineAvail);
   } else if (t.id === 'rcProduct') {
     fillReceiptLocations(); autoExpiry();
@@ -1661,6 +1769,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('tcSearch').addEventListener('submit', searchCustomer);
   $('recallForm').addEventListener('submit', submitRecall);
   $('masterForm').addEventListener('submit', saveMasterForm);
+  $('disposeForm').addEventListener('submit', submitDispose);
+  $('disposeDialog').addEventListener('close', () => { if (G_STATE.disposeOpener && G_STATE.disposeOpener.isConnected) focusTo(G_STATE.disposeOpener); });
+  // マスタ編集：変更があるのに閉じようとしたら確認する
+  $('masterFields').addEventListener('input', () => { $('masterForm').dataset.dirty = '1'; });
+  $('masterFields').addEventListener('change', () => { $('masterForm').dataset.dirty = '1'; });
+  $('masterDialog').addEventListener('cancel', async (e) => {
+    if ($('masterForm').dataset.dirty !== '1') return;
+    e.preventDefault();
+    if (await ask({ title: '変更を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('masterDialog').close();
+  });
   $('sheetBackdrop').addEventListener('click', closeSheet);
   // ガイドは閉じ方（はじめる・あとで見る・Esc）にかかわらず「見た」と記録する
   $('guideDialog').addEventListener('close', onGuideClosed);

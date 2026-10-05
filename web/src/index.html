@@ -136,7 +136,7 @@
         <p class="card-sub">出荷できるロット（検品に合格し、使用期限に余裕があるもの）から、期限の近い順に自動で選びます。</p>
         <div id="shPre"></div>
         <div class="form-grid">
-          <div class="field"><label for="shCustomer">顧客</label><select id="shCustomer" required></select></div>
+          <div class="field"><label for="shCustomer">顧客</label><select id="shCustomer" required aria-describedby="shCustHint"></select><div class="field-hint" id="shCustHint"></div></div>
           <div class="field"><label for="shDate">出荷日</label><input id="shDate" type="date" required></div>
           <div class="field span-2"><label for="shNote">備考 <span class="opt">任意</span></label><input id="shNote" autocomplete="off" maxlength="1000"></div>
         </div>
@@ -188,8 +188,9 @@
       <div class="toolbar">
         <label class="sr-only" for="invFilter">絞り込み</label>
         <input id="invFilter" type="search" placeholder="商品・ロットで絞り込み" autocomplete="off">
-        <label class="check"><input type="checkbox" id="invAvail"><span>引当可のみ</span></label>
+        <label class="check"><input type="checkbox" id="invAvail"><span>出荷できる在庫のみ</span></label>
       </div>
+      <div id="invPreset"></div>
       <div class="card card-flush" id="invBody"></div>
     </section>
 
@@ -209,6 +210,7 @@
 
     <section class="page" id="page-traceCustomer" hidden>
       <form class="card" id="tcSearch" novalidate>
+        <div id="tcMsg"></div>
         <div class="form-grid">
           <div class="field"><label for="tcCustomer">顧客</label><select id="tcCustomer" required></select></div>
           <div class="field"><label for="tcFrom">出荷日（から）</label><input id="tcFrom" type="date"></div>
@@ -272,6 +274,19 @@
     <p id="dialogBody"></p>
     <div class="field" id="dialogInputWrap" hidden><label for="dialogInput" id="dialogInputLabel"></label><textarea id="dialogInput" rows="3" maxlength="1000" aria-describedby="dialogInputErr"></textarea><div class="field-err" id="dialogInputErr"></div></div>
     <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="ok" type="submit" id="dialogOk">OK</button></div>
+  </form>
+</dialog>
+
+<!-- 在庫の処分（廃棄・仕入先返品） -->
+<dialog class="dialog" id="disposeDialog" aria-labelledby="disposeTitle">
+  <form method="dialog" id="disposeForm" novalidate>
+    <h2 id="disposeTitle">在庫を処分する</h2>
+    <p id="disposeInfo"></p>
+    <div class="field"><label for="dpKind">処分の方法</label><select id="dpKind" required><option value="">選択してください</option><option value="DISPOSE">廃棄</option><option value="SUPPLIER_RETURN">仕入先へ返品</option></select></div>
+    <div class="field"><label for="dpQty">数量</label><input id="dpQty" type="number" inputmode="numeric" min="1" step="1" required aria-describedby="dpQtyHint"><div class="field-hint" id="dpQtyHint"></div></div>
+    <div class="field"><label for="dpReason">理由・記録（例：回収品のため廃棄業者へ引渡し）</label><textarea id="dpReason" rows="3" maxlength="1000" required></textarea></div>
+    <div id="dpMsg"></div>
+    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-danger" value="ok" type="submit">処分を記録する</button></div>
   </form>
 </dialog>
 

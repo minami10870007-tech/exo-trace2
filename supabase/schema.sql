@@ -580,7 +580,7 @@ language sql stable set search_path = '' as $$
     'contactedRate', case when (select count(*) from act) = 0 then 100
       else round(100.0 * (select count(*) from act where status <> 'NOT_CONTACTED') / (select count(*) from act)) end,
     'recoveredRate', case when coalesce((select sum(shipped_qty) from act), 0) = 0 then 100
-      else round(100.0 * (select sum(least(shipped_qty, recovered_qty + unrecoverable_qty)) from act) / (select sum(shipped_qty) from act)) end,
+      else round(100.0 * (select sum(least(shipped_qty, recovered_qty)) from act) / (select sum(shipped_qty) from act)) end,  -- 実際に回収できた割合（回収不能は含めない）
     'remainingStock', coalesce((select sum(i.on_hand_qty) from exo.t_recall_lot rl join exo.t_inventory i on i.lot_id = rl.lot_id
                                where rl.recall_id = r.id), 0))
   from exo.t_recall r where r.id = p_recall_id
@@ -701,7 +701,7 @@ begin
              'get_lots', 'get_inventory', 'get_recent_shipments', 'get_shipment_by_no', 'save_master', 'save_sales_rule',
              'register_receipt', 'change_lot_status', 'create_shipment', 'cancel_shipment', 'register_return', 'trace_lot',
              'trace_customer', 'create_recall', 'list_recalls', 'reextract_recall', 'update_recall_target', 'close_recall',
-             'get_setup', 'save_user_prefs'])
+             'get_setup', 'save_user_prefs', 'dispose_stock'])
   loop
     execute 'drop function ' || f;
   end loop;
@@ -770,6 +770,9 @@ begin
     'lastCheck', (select jsonb_build_object('ran_at', exo.fmt_ts(j.ran_at)) || j.result from exo.t_job_log j
                   where j.job = 'daily_check' order by j.ran_at desc, j.id desc limit 1),
     'setup', exo.setup_status(),
+    -- 回収・不合格・期限切れなど、出荷できないまま残っている在庫（処分待ち）
+    'toDispose', coalesce((select jsonb_agg(j order by expires_on, id) from exo.v_lot
+      where stock > 0 and (status in ('RECALLED', 'REJECTED', 'EXPIRED') or expires_on < v_today)), '[]'),
     'checkStale', not exists (select 1 from exo.t_job_log j where j.job = 'daily_check' and j.ran_at > now() - interval '26 hours'));
 end $$;
 
@@ -792,6 +795,7 @@ declare v_today date := exo.today();
 begin
   perform exo.require_user();
   return coalesce((select jsonb_agg(jsonb_build_object(
+      'lot_id', l.id, 'location_id', loc.id,
       'product', pr.name, 'product_code', pr.product_code, 'lot_no', l.lot_no, 'supplier_lot_no', l.supplier_lot_no,
       'location', loc.name, 'quarantine', loc.is_quarantine, 'expires_on', l.expires_on, 'daysLeft', l.expires_on - v_today,
       'status', l.status, 'statusLabel', exo.code_label('lot_status', l.status), 'qty', i.on_hand_qty,
@@ -1344,6 +1348,39 @@ begin
   return jsonb_build_object('returnNo', v_return_no, 'recall', v_target.id is not null, 'disposition', v_disp);
 end $$;
 
+/**
+ * 在庫の処分（廃棄・仕入先返品）。回収品・不合格品・期限切れ品などを在庫から落とす。
+ * p = { lotId, locationId, quantity, kind: 'DISPOSE' | 'SUPPLIER_RETURN', reason }
+ */
+create or replace function public.dispose_stock(p jsonb default '{}') returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_user text := exo.require_user();
+  v_lot exo.t_lot;
+  v_loc exo.m_location;
+  v_qty integer;
+  v_kind text := exo.j_text(p, 'kind');
+  v_reason text := exo.j_text(p, 'reason');
+  v_on_hand integer;
+begin
+  perform exo.write_lock();
+  select * into v_lot from exo.t_lot where id = exo.j_id(p, 'lotId');
+  if v_lot.id is null then perform exo.fail('ロットが見つかりません。画面を再読込してください。'); end if;
+  select * into v_loc from exo.m_location where id = exo.j_id(p, 'locationId');
+  if v_loc.id is null then perform exo.fail('保管場所が見つかりません。画面を再読込してください。'); end if;
+  if v_kind is null or v_kind not in ('DISPOSE', 'SUPPLIER_RETURN') then perform exo.fail('処分の方法（廃棄／仕入先返品）を選択してください。'); end if;
+  v_qty := exo.pos_int(exo.j_num(p, 'quantity'), '処分する数量');
+  if v_reason is null then perform exo.fail('処分の理由を入力してください。'); end if;
+  select on_hand_qty into v_on_hand from exo.t_inventory where lot_id = v_lot.id and location_id = v_loc.id;
+  if coalesce(v_on_hand, 0) < v_qty then
+    perform exo.fail('処分する数量が在庫（' || coalesce(v_on_hand, 0) || '）を超えています。');
+  end if;
+  perform exo.move(v_kind, v_lot.id, v_loc.id, -v_qty, 'dispose', null,
+    case when v_kind = 'DISPOSE' then '廃棄：' else '仕入先返品：' end || v_reason, v_user);
+  return jsonb_build_object('lotNo', v_lot.lot_no, 'quantity', v_qty, 'kind', v_kind,
+    'left', coalesce((select on_hand_qty from exo.t_inventory where lot_id = v_lot.id and location_id = v_loc.id), 0));
+end $$;
+
 -- ---- トレース（SQL-01 / SQL-02 相当） ----
 
 /** ロット番号（社内・仕入先どちらでも、部分一致）→ 出荷先顧客。p = { query } */
@@ -1571,7 +1608,7 @@ begin
   foreach f in array array['get_config', 'get_masters', 'get_dashboard', 'get_lots', 'get_inventory', 'get_recent_shipments',
     'get_shipment_by_no', 'save_master', 'save_sales_rule', 'register_receipt', 'change_lot_status', 'create_shipment',
     'cancel_shipment', 'register_return', 'trace_lot', 'trace_customer', 'create_recall', 'list_recalls', 'reextract_recall',
-    'update_recall_target', 'close_recall', 'get_setup', 'save_user_prefs']
+    'update_recall_target', 'close_recall', 'get_setup', 'save_user_prefs', 'dispose_stock']
   loop
     execute format('revoke all on function public.%I(jsonb) from public', f);
     execute format('revoke all on function public.%I(jsonb) from anon', f);

@@ -187,7 +187,7 @@ try {
   rv = (await G.list_recalls())[0];
   const tB2 = rv.targets.find((t) => t.customer === 'サロンB');
   ok(tB2.status === 'RECOVERED' && tB2.contacted_on === '2026-10-04' && tB2.contact_method === '電話', '回収＋回収不能 ≥ 出荷正味で RECOVERED');
-  ok(rv.contactedRate === 50 && rv.recoveredRate === 60, '連絡済率・回収率');
+  ok(rv.contactedRate === 50 && rv.recoveredRate === 40, '連絡済率・回収率（回収不能は回収に含めない）');
   await throwsMsg(G.close_recall({ recallId: rc.id }), /未完了の回収対象顧客が 1 件/, 'P-14 未完了あり');
   await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CLOSED', closeReason: '' }), /クローズ理由/, 'クローズ理由必須');
   // サロンA の出荷を取消 → 再抽出で A=0・CLOSED
@@ -214,6 +214,17 @@ try {
   await throwsMsg(G.create_recall({ title: '重複', reason: 'x', severity: 'III', lotIds: [lot1.id] }), /対応中の回収案件の対象/, '対応中の回収と同じロットは不可');
   await G.update_recall_target({ targetId: tB3.id, unrecoverableQty: 1, closeReason: '' });
   await G.close_recall({ recallId: rc2.id });
+
+  // ---------------- 処分（廃棄・仕入先返品） ----------------
+  const recInv = (await G.get_inventory()).find((i) => i.lot_no === r1.lotNo && !i.quarantine);
+  ok((await G.get_dashboard()).toDispose.some((l) => l.lot_no === r1.lotNo), 'ダッシュボード：回収ロットの在庫は処分待ち');
+  await throwsMsg(G.dispose_stock({ lotId: recInv.lot_id, locationId: recInv.location_id, quantity: recInv.qty + 1, kind: 'DISPOSE', reason: 'x' }), /在庫（\d+）を超えて/, '処分は在庫以内');
+  await throwsMsg(G.dispose_stock({ lotId: recInv.lot_id, locationId: recInv.location_id, quantity: 1, kind: 'X', reason: 'x' }), /処分の方法/, '処分の方法');
+  await throwsMsg(G.dispose_stock({ lotId: recInv.lot_id, locationId: recInv.location_id, quantity: 1, kind: 'DISPOSE', reason: '' }), /理由/, '処分の理由');
+  const dsp = await G.dispose_stock({ lotId: recInv.lot_id, locationId: recInv.location_id, quantity: recInv.qty, kind: 'SUPPLIER_RETURN', reason: '回収品を返送' });
+  ok(dsp.left === 0 && dsp.kind === 'SUPPLIER_RETURN', '仕入先返品で在庫を落とす');
+  ok(!(await G.get_dashboard()).toDispose.some((l) => l.lot_no === r1.lotNo), '処分後は処分待ちから消える');
+  ok((await G.trace_lot({ query: r1.lotNo }))[0].movementTotals.SUPPLIER_RETURN === -recInv.qty, '在庫移動履歴に記録');
 
   // ---------------- 状態遷移 ----------------
   await throwsMsg(G.change_lot_status({ lotId: lot1.id, to: 'RELEASED', coaConfirmed: true }), /変更できません/, 'RECALLED からは変更不可');

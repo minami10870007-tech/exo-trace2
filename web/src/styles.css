@@ -761,7 +761,8 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .skip-link { position: absolute; left: 8px; top: -60px; z-index: 200; padding: 10px 14px; border-radius: 8px; background: var(--primary-fill); color: var(--on-primary); font-weight: 700; }
 .skip-link:focus { top: 8px; }
 .is-loading { opacity: .5; pointer-events: none; transition: opacity .15s; }
-.contact a, .target-head .s a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; display: inline-flex; align-items: center; min-height: var(--tap); }
+.contact a, .target-head .s a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; display: inline-flex; align-items: center; }
+@media (max-width: 1023.98px), (pointer: coarse) { .contact a, .target-head .s a { min-height: var(--tap); } }
 .rules-confirm { margin: 16px 0 4px; padding: 0 2px; }
 .rules-card-sub { font-size: 12px; color: var(--text-2); margin: 0 0 6px; }
 #rtSearch .field-label { margin-top: 14px; }
@@ -783,7 +784,7 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .contacts { display: grid; gap: 0; }
 .contacts .contact { display: block; }
-.target-head .s a { display: inline-flex; align-items: center; min-height: var(--tap); }
+
 .rules-confirm { padding: 0 16px 16px; margin: 4px 0 0; }
 @media (min-width: 768px) { .rules-confirm { padding: 4px 16px 16px; } }
 @media (max-width: 479.98px) {
@@ -793,3 +794,9 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
   .guide-resume .icon-btn { order: 2; }
   .guide-resume .btn { order: 3; flex: 1 1 100%; }
 }
+
+/* ---------- UX round 5 ---------- */
+@media (max-width: 479.98px) { .guide-resume { position: static; } html:has(body.has-resume), body.has-resume { scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + 16px); } }
+.preset-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px; padding: 4px 4px 4px 12px; border-radius: 99px; background: var(--brand-soft); color: var(--brand); font-size: 13px; font-weight: 700; }
+
+

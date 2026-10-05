@@ -318,6 +318,15 @@ for (const vp of VIEWPORTS) {
     await page.click('#masterForm button[value="save"]'); await waitText('#toasts', /保存しました|。/).catch(() => {});
     if (await page.$('#masterDialog[open]')) throw new Error(await page.textContent('#masterMsg'));
   });
+  await step('処分待ちの在庫を廃棄として記録', async () => {
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+    await page.click('#dashKpis [data-preset="dispose"]'); await waitText('#invPreset', /処分待ち/); await idle(page);
+    await page.click('#invBody [data-action="openDispose"]'); await page.waitForSelector('#disposeDialog[open]');
+    await page.click('#disposeForm button[value="ok"]');
+    if (!/未入力の項目があります/.test(await page.textContent('#dpMsg'))) throw new Error('未入力のチェックがない');
+    await page.selectOption('#dpKind', 'DISPOSE'); await page.fill('#dpQty', '1'); await page.fill('#dpReason', '回収品のため廃棄');
+    await page.click('#disposeForm button[value="ok"]'); await waitText('#toasts', /廃棄として記録/);
+  });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
     if (n !== '1') throw new Error('created_by がログインユーザーでない');
