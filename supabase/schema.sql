@@ -1598,6 +1598,7 @@ begin
     v_t.status := 'CLOSED';
     v_t.close_reason := left(v_close, 500);
   elsif v_status = 'CONTACTED' and v_t.status = 'NOT_CONTACTED' then
+    if v_t.contacted_on is null then perform exo.fail('連絡済にするときは、連絡日を入力してください。'); end if;
     v_t.status := 'CONTACTED';
   elsif v_status is not null and v_status not in ('CONTACTED', 'CLOSED') then
     perform exo.fail('状態が不正です。');

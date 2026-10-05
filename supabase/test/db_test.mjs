@@ -195,6 +195,7 @@ try {
   const tB2 = rv.targets.find((t) => t.customer === 'サロンB');
   ok(tB2.status === 'RECOVERED' && tB2.contacted_on === '2026-10-04' && tB2.contact_method === '電話', '回収＋回収不能 ≥ 出荷正味で RECOVERED');
   ok(rv.contactedRate === 50 && rv.recoveredRate === 40, '連絡済率・回収率（回収不能は回収に含めない）');
+  await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CONTACTED', contactMethod: '電話' }), /連絡日を入力/, '連絡日なしでは連絡済にできない');
   ok((await G.update_recall_target({ targetId: tA.id, contactedOn: '2026-10-04', contactMethod: 'メール' })).targets.find((t) => t.id === tA.id).status === 'CONTACTED', '連絡日を記録したら連絡済');
   await throwsMsg(G.close_recall({ recallId: rc.id }), /未完了の回収対象顧客が 1 件/, 'P-14 未完了あり');
   await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CLOSED', closeReason: '' }), /クローズ理由/, 'クローズ理由必須');

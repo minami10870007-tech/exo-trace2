@@ -675,7 +675,7 @@ function showPage(id) {
   document.title = page.label + '｜EXO-TRACE';
   closeSheet();
   window.scrollTo(0, 0); // 保存のお知らせ（トースト）は画面を移っても数秒は残す
-  if ($('guideResume').hidden) $('toasts').style.top = ''; // ガイドの帯が消えたら、帯の下に合わせた位置を戻す
+  $('toasts').style.top = ''; // 画面を移ったら、前の画面の帯に合わせた位置を戻す
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
@@ -740,7 +740,7 @@ async function reloadMasters(opts = {}) {
     const oldP = old && (old.products || []).find((x) => String(x.id) === keep.rcProduct);
     const newP = S.M.products.find((x) => String(x.id) === keep.rcProduct);
     const prodClass = oldP && newP && oldP.storage_class !== newP.storage_class;
-    gone.rcMsg.push({ name: l ? l.location_code + ' ' + l.name : '保管場所', loc: true, prodClass,
+    gone.rcMsg.push({ name: l ? l.name + '（' + l.location_code + '）' : '保管場所', loc: true, prodClass,
       prodName: newP ? newP.product_code + ' ' + newP.name : '',
       self: !!opts.self && (prodClass ? opts.self.key === 'products' && String(opts.self.id) === keep.rcProduct
         : opts.self.key === 'locations' && String(opts.self.id) === keep.rcLoc) });
@@ -1312,7 +1312,10 @@ async function submitShipment(e) {
   if (shortP) {
     const el = lineEls.find((l) => l.querySelector('.slProd').value === shortP).querySelector('.slQty');
     el.setAttribute('aria-invalid', 'true');
-    alertBox('shMsg', `「${(S.M.products.find((p) => String(p.id) === shortP) || {}).name}」の数量が引当可能数（${fmt(availFor(shortP))}）を超えています。`, 'ng', true);
+    const un = unshippableFor(shortP);
+    alertBox('shMsg', `「${(S.M.products.find((p) => String(p.id) === shortP) || {}).name}」の数量が引当可能数（${fmt(availFor(shortP))}）を超えています。` +
+      (un ? `\nほかに在庫 ${fmt(un.qty)} がありますが、${un.why}のため出荷できません。` : ''), 'ng', true,
+      un ? '<button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="inventory">在庫照会で確認</button>' : '');
     el.focus();
     return;
   }
@@ -1373,6 +1376,14 @@ function availFor(productId) {
   if (!p) return null;
   return S.inventory.filter((r) => r.allocatable && r.product_code === p.product_code).reduce((a, r) => a + r.qty, 0);
 }
+/** 在庫はあるが出荷できない数量と、その理由（回収中・残期間不足など） */
+function unshippableFor(productId) {
+  const p = S.M && S.M.products.find((x) => String(x.id) === String(productId));
+  if (!p) return null;
+  const rows = S.inventory.filter((r) => !r.allocatable && r.qty > 0 && r.product_code === p.product_code);
+  if (!rows.length) return null;
+  return { qty: rows.reduce((a, r) => a + r.qty, 0), why: [...new Set(rows.map(invReason))].join('・') };
+}
 /** 出荷先の顧客区分を選択欄の下に出す（販売できる商品が区分で決まるため） */
 function updateCustHint() {
   const c = S.M && S.M.customers.find((x) => String(x.id) === $('shCustomer').value);
@@ -1395,7 +1406,8 @@ function updateLineAvail(line, byUser) {
   const n = pid ? availFor(pid) : null;
   const qty = Number(line.querySelector('.slQty').value || 0);
   const blocked = pid ? saleBlocked(pid) : null;
-  out.textContent = blocked || (n === null ? '' : `引当可能 ${fmt(n)}`);
+  const un = pid && n !== null ? unshippableFor(pid) : null;
+  out.textContent = blocked || (n === null ? '' : `引当可能 ${fmt(n)}` + (un ? `（ほかに在庫 ${fmt(un.qty)} は${un.why}のため出荷できません）` : ''));
   out.classList.toggle('short', !!blocked || (n !== null && qty > n));
   // 直したら赤い印とエラー表示を消す
   if (pid && !blocked) line.querySelector('.slProd').removeAttribute('aria-invalid'); // 商品を選び直したときだけ印を消す
@@ -2067,6 +2079,13 @@ async function saveTarget(btn) {
     cd.focus();
     return;
   }
+  // 連絡済にするなら連絡日が要る（後で返品日などで埋めると、実際と違う記録になるため）
+  if (st && st.value === 'CONTACTED' && !cd.value && !cd.dataset.orig) {
+    cd.setAttribute('aria-invalid', 'true');
+    $('cre_' + id).textContent = '連絡済にするときは、連絡日を入力してください。';
+    cd.focus();
+    return;
+  }
   if (st && st.value === 'CLOSED' && !$('cr_' + id).value.trim()) {
     $('cr_' + id).setAttribute('aria-invalid', 'true');
     $('cre_' + id).textContent = 'クローズするときは、理由を入力してください。';
@@ -2077,8 +2096,9 @@ async function saveTarget(btn) {
     try {
       await api('updateRecallTarget', { targetId: id, contactedOn: $('cd_' + id).value, contactMethod: $('cm_' + id).value,
         unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value, expectedUpdatedAt: btn.dataset.ver });
+      const who = $('tg_' + id) ? $('tg_' + id).querySelector('.t').textContent : '';
       $('toasts').innerHTML = '';
-      toast('保存しました');
+      toast(who ? `${who} の進捗を保存しました` : '保存しました');
       await loadRecalls(id);
       focusTo($('tg_' + id));
     } catch (err) {
