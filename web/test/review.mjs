@@ -416,7 +416,7 @@ for (const vp of VIEWPORTS) {
     if (!/完了しました/.test(await page.textContent('#toasts'))) throw new Error('完了の通知がない');
   });
   await step('ガイド：閉じたら次回ログインでは自動表示しない', async () => {
-    await page.click('#guideSkip'); await page.waitForSelector('#guideDialog:not([open])');
+    await page.click('#guideSkip'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
     await page.waitForTimeout(500);
     await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]'); await page.waitForSelector('#login:not([hidden])');
     await page.fill('#loginPassword', SECOND_USER.password); await page.click('#loginForm button[type="submit"]');
@@ -427,7 +427,7 @@ for (const vp of VIEWPORTS) {
     await page.goto(fresh.url + '/#/dashboard'); await idle(page);
     const t = await page.textContent('.setup-card'); if (!/1 \/ 6 完了/.test(t)) throw new Error(t.slice(0, 80));
     await page.click('.setup-card [data-action="guideStep"]'); await waitText('#guideCount', /ステップ 3 /);
-    await page.keyboard.press('Escape'); await page.waitForSelector('#guideDialog:not([open])');
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
     await page.click('[data-action="hideSetup"]'); await waitText('#toasts', /非表示/);
     if (await page.$('.setup-card')) throw new Error('非表示にならない');
   });

@@ -634,6 +634,8 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .setup-mark { flex: none; width: 28px; height: 28px; border-radius: 99px; display: grid; place-items: center; font-size: 13px; font-weight: 700;
   border: 2px solid var(--border-strong); color: var(--text-2); }
 .setup-mark .ic { width: 16px; height: 16px; }
+.setup-list li.next .setup-mark { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+.setup-list li.next .setup-s { color: var(--brand); font-weight: 700; }
 .setup-list li.done .setup-mark { background: var(--ok); border-color: var(--ok); color: #fff; }
 .setup-list li.done .setup-t { color: var(--text-2); text-decoration: line-through; text-decoration-color: var(--border-strong); }
 .setup-list .grow { flex: 1; min-width: 0; }

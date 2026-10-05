@@ -568,15 +568,16 @@ function setupCard(setup) {
   if (!setup || setupDone(setup) || (S.cfg.prefs && S.cfg.prefs.checklistHidden)) return '';
   const steps = GUIDE.map((g, i) => ({ g, i })).filter((x) => x.g.key);
   const done = steps.filter((x) => setup[x.g.key]).length;
+  const nextKey = (steps.find((x) => !setup[x.g.key]) || {}).g.key;
   return `<section class="card span-full setup-card" aria-labelledby="setupTitle"><div class="card-head"><div>
       <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${steps.length} 完了・上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
     <div class="meter" aria-hidden="true"><i data-w="${Math.round((done / steps.length) * 100)}"></i></div>
-    <ol class="setup-list">${steps.map(({ g, i }, n) => `<li class="${setup[g.key] ? 'done' : ''}">
+    <ol class="setup-list">${steps.map(({ g, i }, n) => `<li class="${setup[g.key] ? 'done' : g.key === nextKey ? 'next' : ''}">
       <span class="setup-mark" aria-hidden="true">${setup[g.key] ? icon('check') : n + 1}</span>
-      <div class="grow"><div class="setup-t">${esc(g.title)}</div><div class="setup-s">${setup[g.key] ? '完了' : '未完了'}</div></div>
-      ${setup[g.key] ? '' : `<button type="button" class="btn btn-secondary btn-sm" data-action="guideStep" data-step="${i}" aria-label="${esc(g.title)}の手順を見る">手順を見る</button>`}</li>`).join('')}</ol>
+      <div class="grow"><div class="setup-t">${esc(g.title)}</div><div class="setup-s">${setup[g.key] ? '完了' : g.key === nextKey ? '次はここから' : '未完了'}</div></div>
+      ${setup[g.key] ? '' : `<button type="button" class="btn ${g.key === nextKey ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="guideStep" data-step="${i}" aria-label="${esc(g.title)}の手順を見る">手順を見る</button>`}</li>`).join('')}</ol>
     <div class="setup-foot"><button type="button" class="btn btn-ghost btn-sm" data-action="hideSetup">このカードを非表示</button>
-      <button type="button" class="btn btn-primary btn-sm" data-action="guideOpen">ガイドを最初から見る</button></div></section>`;
+      <button type="button" class="btn btn-secondary btn-sm" data-action="guideOpen">ガイドを最初から見る</button></div></section>`;
 }
 
 // ======================================================================
