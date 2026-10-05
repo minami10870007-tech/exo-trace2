@@ -38,7 +38,8 @@ const rowAlert = (status) => (ALERT_STATUS.has(status) ? ' class="is-alert"' : '
 const mono = (v) => `<span class="mono">${esc(v)}</span>`;
 const nw = (v) => `<span class="nowrap">${esc(v)}</span>`;
 /** 電話番号・メールアドレスをタップで発信・送信できるリンクにする */
-const telLink = (v) => (v ? `<a href="tel:${esc(String(v).replace(/[^0-9+]/g, ''))}">${esc(v)}</a>` : '');
+// 電話をかけるリンク。内線は番号に含めない（つなげると別の番号にかかる）
+const telLink = (v) => (v ? `<a href="tel:${esc(String(v).split(/\s*[（(]?\s*(?:内線|ext\.?|#)/i)[0].replace(/[^0-9+]/g, ''))}">${esc(v)}</a>` : '');
 const mailLink = (v) => (v ? `<a href="mailto:${esc(v)}">${esc(v)}</a>` : '');
 const joinNw = (arr, sep) => arr.filter((v) => v !== '' && v !== null && v !== undefined).map(nw).join(sep || '・');
 
@@ -1894,8 +1895,12 @@ function renderInventory() {
   $('invPreset').innerHTML = preset ? `<span class="preset-chip">絞り込み：${esc(preset.label)}<button type="button" class="icon-btn" data-action="clearInvPreset" aria-label="絞り込みを解除">${icon('x')}</button></span>` : '';
   // 日本語入力で打った「ー」（例：BSー2409）は、英数字のあいだならハイフンとしても探す（商品名の「ー」はそのまま）
   const terms = q.split(/\s+/).filter(Boolean).map((t) => [...new Set([t, t.replace(/(?<=[A-Z0-9])ー|ー(?=[A-Z0-9])/g, '-')])]);
+  // ロット番号を並べた絞り込み（回収案件の対象ロットなど）は「どれか」に一致すればよい
+  const lotNos = new Set(S.inventory.map((r) => String(r.lot_no).toUpperCase()));
+  const anyLot = terms.length > 1 && terms.every((alts) => alts.some((t) => lotNos.has(t)));
+  const hit = (r, alts) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no, r.location].some((v) => alts.some((t) => half(v, false).toUpperCase().includes(t))); // 比べる側も同じ形に（℃ など）
   const rows = S.inventory.filter((r) => (!avail || r.allocatable) && (!preset || preset.test(r)) &&
-    (!terms.length || terms.every((alts) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no].some((v) => alts.some((t) => String(v || '').toUpperCase().includes(t))))));
+    (!terms.length || (anyLot ? terms.some((alts) => alts.includes(String(r.lot_no).toUpperCase())) : terms.every((alts) => hit(r, alts)))));
   $('invBody').innerHTML = table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, '仕入先ロット', { label: '保管場所', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' },
     { label: '残日数', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '数量', cls: 'num' }, { label: '', cls: 'actions' }],
     rows.map((r) => ({ attrs: ` class="clickable${ALERT_STATUS.has(r.status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(r.lot_no)}" tabindex="0" aria-label="${esc(r.lot_no)} を追跡"`,
@@ -2525,7 +2530,7 @@ async function saveMasterForm(e) {
   // 回収の連絡先になるメール・電話は形式を確かめる（欄の下に示す）
   const bad = [];
   if ($('mf_email') && $('mf_email').value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test($('mf_email').value.trim())) bad.push(['mf_email', 'メールアドレスの形式が正しくありません（例：info@example.com）']);
-  if ($('mf_phone') && $('mf_phone').value.trim() && !/^[0-9+() -]{6,}((内線|ext\.?|#) ?[0-9]+)?$/i.test($('mf_phone').value.trim())) bad.push(['mf_phone', '電話番号は数字とハイフンで入力してください（例：03-1234-5678、内線は「03-1234-5678 内線12」）']);
+  if ($('mf_phone') && $('mf_phone').value.trim() && !/^[0-9+() -]{6,}(\(?(内線|ext\.?|#) ?[0-9]+\)?)?$/i.test($('mf_phone').value.trim())) bad.push(['mf_phone', '電話番号は数字とハイフンで入力してください（例：03-1234-5678、内線は「03-1234-5678 内線12」）']);
   if (bad.length) {
     bad.forEach(([id, m]) => fieldErr($(id), m));
     alertBox('masterMsg', bad.map((b) => b[1]).join('\n'), 'ng', true);

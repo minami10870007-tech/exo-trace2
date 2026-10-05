@@ -537,6 +537,20 @@ for (const vp of VIEWPORTS) {
     const r = await page.evaluate(() => JSON.stringify(normPayload({ note: ' x ', lines: [{ productId: '1', quantity: '2' }, { productId: '', quantity: '', unitPrice: '' }] })));
     if (r !== JSON.stringify({ note: 'x', lines: [{ productId: '1', quantity: '2' }] })) throw new Error(r);
   });
+  await step('在庫照会：複数ロット番号（回収の対象ロット）・保管場所名で絞り込める', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="inventory"]'); await idle(page);
+    const r = await page.evaluate(() => {
+      const lots = [...new Set(S.inventory.map((x) => x.lot_no))].slice(0, 2);
+      $('invFilter').value = lots.join(' '); renderInventory();
+      const n1 = document.querySelectorAll('#invBody [data-action="openDispose"]').length;
+      $('invFilter').value = S.inventory[0].location; renderInventory();
+      const n2 = document.querySelectorAll('#invBody [data-action="openDispose"]').length;
+      $('invFilter').value = ''; renderInventory();
+      return [lots.length, n1, n2];
+    });
+    if (r[0] < 2 || r[1] < 2) throw new Error('複数ロットで絞り込めない: ' + r);
+    if (r[2] < 1) throw new Error('保管場所名で絞り込めない');
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);

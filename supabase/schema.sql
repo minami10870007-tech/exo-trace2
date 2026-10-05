@@ -929,7 +929,7 @@ begin
   if exo.j_text(d, 'email') is not null and exo.j_text(d, 'email') !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
     perform exo.fail('メールアドレスの形式が正しくありません（例：info@example.com）。');
   end if;
-  if exo.j_text(d, 'phone') is not null and exo.j_text(d, 'phone') !~* '^[0-9+() -]{6,}((内線|ext\.?|#) ?[0-9]+)?$' then
+  if exo.j_text(d, 'phone') is not null and exo.j_text(d, 'phone') !~* '^[0-9+() -]{6,}(\(?(内線|ext\.?|#) ?[0-9]+\)?)?$' then
     perform exo.fail('電話番号は数字とハイフンで入力してください（例：03-1234-5678）。');
   end if;
 
