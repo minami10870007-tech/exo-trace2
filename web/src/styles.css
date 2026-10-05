@@ -747,3 +747,25 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 }
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
 #guideAfter:empty { display: none; }
+
+/* ---------- UX round 3 ---------- */
+html { scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + 16px); }
+@media (max-width: 767.98px) {
+  html { scroll-padding-bottom: calc(var(--bottomnav-h) + 88px + env(safe-area-inset-bottom)); }
+  body.has-resume .toasts { top: calc(var(--topbar-h) + env(safe-area-inset-top) + 84px); }
+}
+body.has-resume { scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + 88px); }
+html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + 88px); }
+.guide-resume-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
+.guide { overflow-y: auto; }
+.skip-link { position: absolute; left: 8px; top: -60px; z-index: 200; padding: 10px 14px; border-radius: 8px; background: var(--primary-fill); color: var(--on-primary); font-weight: 700; }
+.skip-link:focus { top: 8px; }
+.is-loading { opacity: .5; pointer-events: none; transition: opacity .15s; }
+.contact a, .target-head .s a { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; display: inline-flex; align-items: center; min-height: var(--tap); }
+.rules-confirm { margin: 16px 0 4px; padding: 0 2px; }
+.rules-card-sub { font-size: 12px; color: var(--text-2); margin: 0 0 6px; }
+#rtSearch .field-label { margin-top: 14px; }
+.line-avail { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+.line-avail.short { color: var(--danger); font-weight: 700; }
+.recent-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.recent-chips .btn { font-family: var(--mono); }

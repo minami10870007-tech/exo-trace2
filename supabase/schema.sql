@@ -795,7 +795,10 @@ begin
       'product', pr.name, 'product_code', pr.product_code, 'lot_no', l.lot_no, 'supplier_lot_no', l.supplier_lot_no,
       'location', loc.name, 'quarantine', loc.is_quarantine, 'expires_on', l.expires_on, 'daysLeft', l.expires_on - v_today,
       'status', l.status, 'statusLabel', exo.code_label('lot_status', l.status), 'qty', i.on_hand_qty,
-      'allocatable', l.status = 'RELEASED' and not loc.is_quarantine and l.expires_on - v_today >= pr.min_remaining_days)
+      'allocatable', l.status = 'RELEASED' and not loc.is_quarantine and l.expires_on - v_today >= pr.min_remaining_days,
+      'reason', case when l.status <> 'RELEASED' then exo.code_label('lot_status', l.status)
+                     when loc.is_quarantine then '隔離保管中'
+                     when l.expires_on - v_today < pr.min_remaining_days then '残期間不足（' || pr.min_remaining_days || '日未満）' end)
       order by pr.product_code, l.expires_on, l.id, loc.id)
     from exo.t_inventory i
     join exo.t_lot l on l.id = i.lot_id

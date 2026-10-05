@@ -38,6 +38,7 @@
   <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></symbol>
 </svg>
 
+<a class="skip-link" href="#main">本文へスキップ</a>
 <div class="progress" id="progress" aria-hidden="true"></div>
 
 <!-- ログイン -->
@@ -119,14 +120,14 @@
 
     <section class="page" id="page-inspect" hidden>
       <div class="toolbar">
-        <div class="segmented" role="tablist" aria-label="表示するロット" id="insFilter">
+        <div class="segmented" role="tablist" aria-label="表示するロット" id="insFilter" data-panel="insBody">
           <button type="button" role="tab" data-filter="QUARANTINE,HOLD" aria-selected="true">検品待ち・保留</button>
           <button type="button" role="tab" data-filter="RELEASED" aria-selected="false">合格</button>
           <button type="button" role="tab" data-filter="" aria-selected="false">すべて</button>
         </div>
       </div>
       <div id="insMsg"></div>
-      <div class="cards-list" id="insBody"></div>
+      <div class="cards-list" id="insBody" role="tabpanel" tabindex="-1"></div>
     </section>
 
     <section class="page" id="page-shipment" hidden>
@@ -196,10 +197,11 @@
       <div class="card">
         <form class="search-row" id="tlSearch" novalidate>
           <label class="sr-only" for="tlQuery">ロット番号</label>
-          <input id="tlQuery" type="search" placeholder="ロット番号（一部でも可）" aria-describedby="tlHint" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
+          <input id="tlQuery" type="search" placeholder="ロット番号" aria-describedby="tlHint" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
           <button class="btn btn-primary" type="submit"><svg class="ic"><use href="#i-search"/></svg>追跡</button>
         </form>
-        <p class="field-hint" id="tlHint">社内ロット番号・仕入先ロット番号のどちらでも探せます。</p>
+        <p class="field-hint" id="tlHint">社内ロット番号・仕入先ロット番号のどちらでも、一部だけでも探せます。</p>
+        <div id="tlRecent"></div>
         <p class="note">部分一致で検索できます。販売先・顧客の手元に残っている数量・在庫・ステータス履歴を表示します。</p>
       </div>
       <div id="tlBody"></div>
@@ -237,7 +239,7 @@
 
     <section class="page" id="page-master" hidden>
       <div class="toolbar">
-        <div class="segmented" role="tablist" aria-label="マスタの種類" id="msTabs">
+        <div class="segmented" role="tablist" aria-label="マスタの種類" id="msTabs" data-panel="msList">
           <button type="button" role="tab" data-table="m_product" aria-selected="true">商品</button>
           <button type="button" role="tab" data-table="m_customer" aria-selected="false">顧客</button>
           <button type="button" role="tab" data-table="m_supplier" aria-selected="false">仕入先</button>
@@ -247,7 +249,7 @@
         <button class="btn btn-primary btn-sm" type="button" data-action="newMaster" id="msNew"><svg class="ic"><use href="#i-plus"/></svg>新規登録</button>
       </div>
       <div id="msMsg"></div>
-      <div class="card card-flush" id="msList"></div>
+      <div class="card card-flush" id="msList" role="tabpanel" tabindex="-1"></div>
     </section>
   </main>
 

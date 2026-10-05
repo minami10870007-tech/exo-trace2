@@ -289,6 +289,7 @@ for (const vp of VIEWPORTS) {
   });
   await step('不合格は確認ダイアログを出す', async () => {
     await page.click('#bottomNav [data-page="inspect"]'); await idle(page);
+    await page.waitForSelector('#insBody:not(.is-loading) .lot-card select.insTo'); await page.waitForTimeout(400);
     const card = page.locator('#insBody .lot-card', { has: page.locator('select.insTo') }).first();
     await card.locator('select.insTo').selectOption('REJECTED'); await card.locator('input.insReason').fill('テスト');
     await card.locator('[data-action="changeStatus"]').click(); await page.waitForSelector('#dialog[open]');
