@@ -1121,7 +1121,7 @@ function setupCard() {
   const done = SETUP_STEPS.filter((x) => st[x.g.key]).length;
   const next = firstTodo(st);
   return `<section class="card setup-card" aria-labelledby="setupTitle"><div class="card-head"><div>
-      <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${SETUP_STEPS.length} 完了・上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
+      <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${SETUP_STEPS.length} 完了 ／ 上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
     <div class="meter" aria-hidden="true"><i data-w="${Math.round((done / SETUP_STEPS.length) * 100)}"></i></div>
     <ol class="setup-list">${SETUP_STEPS.map(({ g, i }, n) => `<li class="${st[g.key] ? 'done' : i === next ? 'next' : ''}">
       <span class="setup-mark" aria-hidden="true">${st[g.key] ? icon('check') : n + 1}</span>
@@ -2114,7 +2114,8 @@ async function searchLot(e, fromUrl) {
             { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '回収', cls: 'num' }, { label: '手元', cls: 'num' }],
             l.shipments.map((s) => ({ cells: [html(`${esc(s.customer)}<div class="card-sub">${esc(s.customer_code)}</div>`),
               html([telLink(s.phone), mailLink(s.email)].filter(Boolean).map((v) => `<span class="contact">${v}</span>`).join('')), html(mono(s.shipment_no)), s.shipped_on,
-              html(s.status === 'SHIPPED' ? badge('ok', '出荷済') : badge('ng', '取消')), num(s.quantity), num(s.returned), num(s.recalled), num(s.net)] })),
+              // 全量が戻った販売先は、回収・返品で手元0になったことが分かるように
+              html(s.status !== 'SHIPPED' ? badge('ng', '取消') : Number(s.net) > 0 ? badge('ok', '出荷済') : Number(s.recalled) > 0 ? badge('RECOVERED', '回収済') : badge('', '返品済')), num(s.quantity), num(s.returned), num(s.recalled), num(s.net)] })),
             { empty: '出荷実績はありません', emptyIcon: 'truck' })}
           <h3 class="section-title">保管場所別在庫</h3>
           ${l.inventory.length ? `<div class="chips">${l.inventory.map((i) => `<span class="chip">${esc(i.location)}：${fmt(i.qty)}</span>`).join('')}</div>` : '<p class="note">在庫はありません</p>'}
@@ -2420,7 +2421,9 @@ async function recallFailed(err, id) {
   const card = $('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
   if (err.unsure && fresh && card && !card.querySelector('[data-action="closeRecall"]') && /完了/.test(card.textContent)) toast('回収案件の完了は記録されていました');
   else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
-  focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`) || $('rclList'));
+  const a = $('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
+  if (a) a.scrollIntoView({ block: 'start' });
+  focusTo(a || $('rclList'));
 }
 
 async function reextract(btn) {
@@ -2446,7 +2449,9 @@ async function closeRecall(btn) {
       $('toasts').innerHTML = '';
       toast('回収案件 ' + r.recall_no + ' を完了しました');
       await loadRecalls();
-      focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(btn.dataset.id)}"]`) || $('rclList').firstElementChild); // 完了した案件へ
+      const done = $('rclList').querySelector(`article[data-id="${CSS.escape(btn.dataset.id)}"]`) || $('rclList').firstElementChild;
+      if (done) done.scrollIntoView({ block: 'start' }); // 完了した案件は下に並び替わるので、そこまで移動して見せる
+      focusTo(done);
     } catch (err) { await recallFailed(err, btn.dataset.id); }
   });
 }
@@ -2792,6 +2797,7 @@ const ACTIONS = {
         if (latest && latest > d.value) toast(`他の利用者が ${latest} の連絡を記録済みのため、今回の連絡（${d.value}）は「${who}」の最終連絡に反映されませんでした。`, 'warn');
         else toast(`「${who}」への連絡を記録しました`);
         await loadRecalls(gid); // 他の顧客の入力途中の内容は残す
+        if ($(gid)) $(gid).scrollIntoView({ block: 'start' }); // 記録した内容（連絡日・方法）が見えるように
         focusTo($(gid) || $('rclList'));
       } catch (err) {
         if (/連絡日/.test(err.message) && $(gid + '_e')) { $(gid + '_e').textContent = err.message; d.setAttribute('aria-invalid', 'true'); d.focus(); return; }
