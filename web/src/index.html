@@ -135,6 +135,7 @@
         <h2 class="card-title">出荷登録</h2>
         <p class="card-sub">出荷できるロット（検品に合格し、使用期限に余裕があるもの）から、期限の近い順に自動で選びます。</p>
         <div id="shPre"></div>
+        <div id="shDone"></div>
         <div class="form-grid">
           <div class="field"><label for="shCustomer">顧客</label><select id="shCustomer" required aria-describedby="shCustHint"></select><div class="field-hint" id="shCustHint"></div></div>
           <div class="field"><label for="shDate">出荷日</label><input id="shDate" type="date" required></div>
@@ -191,6 +192,7 @@
         <label class="check"><input type="checkbox" id="invAvail"><span>出荷できる在庫のみ</span></label>
       </div>
       <div id="invPreset"></div>
+      <div id="invMsg"></div>
       <div class="card card-flush" id="invBody"></div>
     </section>
 

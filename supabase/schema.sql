@@ -1337,7 +1337,10 @@ begin
     update exo.t_recall_target set recovered_qty = v_recovered,
       unrecoverable_qty = least(unrecoverable_qty, greatest(shipped_qty - v_recovered, 0)),
       status = case when status <> 'CLOSED' and v_recovered + least(unrecoverable_qty, greatest(shipped_qty - v_recovered, 0)) >= shipped_qty
-                    then 'RECOVERED' else status end,
+                    then 'RECOVERED'
+                    when status = 'NOT_CONTACTED' then 'CONTACTED'  -- 回収品が届いた＝顧客と連絡が取れている
+                    else status end,
+      contacted_on = coalesce(contacted_on, v_returned_on),
       updated_at = now()
     where id = v_target.id;
   else

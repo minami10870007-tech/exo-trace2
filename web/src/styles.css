@@ -315,7 +315,7 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .list .t { font-weight: 600; overflow-wrap: anywhere; }
 .list .s { font-size: 12px; color: var(--text-2); }
 .eyebrow { display: block; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: .02em; margin-bottom: 2px; }
-.meter { height: 6px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; margin-top: 6px; }
+.meter { height: 6px; border-radius: 3px; background: var(--border); border: 1px solid var(--border-strong); overflow: hidden; margin-top: 6px; }
 .meter-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--text-2); font-weight: 600; white-space: nowrap; }
 .meter-row .meter { flex: 1; margin: 0; }
 .meter i { display: block; height: 100%; background: var(--brand); }
@@ -813,3 +813,18 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 @media (max-width: 639.98px) and (prefers-color-scheme: dark) { .dialog .dialog-actions { background: var(--surface-2); } }
 .qty-row { display: flex; gap: 8px; align-items: stretch; }
 .qty-row input { flex: 1; min-width: 0; }
+
+/* ---------- UX round 7 ---------- */
+@media (max-width: 767.98px) {
+  .rtable td.primary { flex-wrap: wrap; }
+  .rtable td.primary > .v .mono { white-space: nowrap; overflow-wrap: normal; }
+}
+@media (min-width: 768px) and (max-width: 1279.98px) {
+  .rtable.wide-table td.primary { flex-wrap: wrap; }
+  .rtable.wide-table td.primary > .v .mono { white-space: nowrap; overflow-wrap: normal; }
+}
+.contacts .contact, .rtable .contact { display: flex; align-items: center; line-height: 1.3; }
+#shCustHint:empty { display: none; }
+#shDone:not(:empty) { margin-bottom: 8px; }
+.as-of { font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+#invMsg .alert { margin: 0 0 12px; }

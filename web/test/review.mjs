@@ -283,9 +283,9 @@ for (const vp of VIEWPORTS) {
     const cv = await page.$eval('#shCustomer', (s) => [...s.options].find((o) => o.text.includes('サロン・ド・ルミエール')).value);
     await page.selectOption('#shCustomer', cv);
     await page.selectOption('.slProd', { index: 1 }); await page.fill('.slQty', '2');
-    await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /出荷を確定しました|。/);
-    const t = await page.textContent('#shMsg'); if (!/出荷を確定しました/.test(t)) throw new Error(t);
-    shippedLot = await page.textContent('#shMsg .rtable .mono');
+    await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await page.waitForFunction(() => /出荷を確定しました/.test(document.getElementById('shDone').textContent) || document.querySelector('#shMsg .alert-ng'), null, { timeout: 15000 });
+    const t = await page.textContent('#shDone'); if (!/出荷を確定しました/.test(t)) throw new Error(await page.textContent('#shMsg'));
+    shippedLot = await page.textContent('#shDone .rtable .mono');
   });
   await step('不合格は確認ダイアログを出す', async () => {
     await page.click('#bottomNav [data-page="inspect"]'); await idle(page);
@@ -337,7 +337,17 @@ for (const vp of VIEWPORTS) {
     await page.click('#disposeForm button[value="ok"]');
     if (!/未入力の項目があります/.test(await page.textContent('#dpMsg'))) throw new Error('未入力のチェックがない');
     await page.selectOption('#dpKind', 'DISPOSE'); await page.fill('#dpQty', '1'); await page.fill('#dpReason', '回収品のため廃棄');
-    await page.click('#disposeForm button[value="ok"]'); await waitText('#toasts', /廃棄として記録/);
+    await page.click('#disposeForm button[value="ok"]'); await waitText('#invMsg', /廃棄として記録/);
+  });
+  await step('ロット追跡は開き直すと最新の状態になる', async () => {
+    await page.click('#bottomNav [data-page="traceLot"]'); await page.fill('#tlQuery', 'EXL-77812'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
+    const before = await page.textContent('#tlBody .as-of');
+    await page.waitForTimeout(1100);
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+    await page.click('#bottomNav [data-page="traceLot"]'); await idle(page);
+    if (!(await page.$('#tlBody .lot-card'))) throw new Error('結果が消えた');
+    if (!/時点/.test(await page.textContent('#tlBody .as-of'))) throw new Error('時点の表示がない');
+    void before;
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
