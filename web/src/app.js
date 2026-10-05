@@ -1242,7 +1242,7 @@ async function submitReceipt(e) {
       const r = await api('registerReceipt', { supplierId: $('rcSupplier').value, productId: $('rcProduct').value, supplierLotNo: $('rcSupLot').value,
         receiptDate: $('rcDate').value, manufacturedOn: $('rcMfg').value, expiresOn: $('rcExp').value, quantity: $('rcQty').value,
         unitPrice: $('rcPrice').value, arrivalTemp: $('rcTemp').value, locationId: $('rcLoc').value });
-      alertBox('rcMsg', `入荷を登録しました。\n入荷番号 ${r.receiptNo}／社内ロット番号 ${r.lotNo}（検品待ち）` + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok', false,
+      alertBox('rcMsg', `入荷を登録しました。\n入荷番号 ${r.receiptNo}／社内ロット番号 ${r.lotNo}（検品待ち）` + (r.note ? '\n' + r.note : '') + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok', false,
         goBtn('inspect', '検品へ進む'));
       ['rcSupLot', 'rcMfg', 'rcExp', 'rcQty', 'rcPrice', 'rcTemp'].forEach((id) => { $(id).value = ''; });
       clearMarks($('receiptForm'));
@@ -1841,7 +1841,7 @@ async function submitReturn(e) {
       alertBox('rtFindMsg', `返品を登録しました。返品番号 ${r.returnNo}／処置：${r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄'}${r.recall ? '（回収品として計上）' : ''}`, 'ok', true,
         `<button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の返品を登録</button>` +
         (lot ? `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(lot)}">このロットを追跡</button>` : '') +
-        (r.recall ? goBtn('recall', '回収案件を開く') : ''));
+        (r.recall ? (r.recallId ? `<button type="button" class="btn btn-secondary btn-sm" data-action="openRecall" data-id="${r.recallId}">回収案件を開く</button>` : goBtn('recall', '回収案件を開く')) : ''));
       $('rtReason').value = '';
       writeDraft(S.rtNo, null);
       $('rtForm').hidden = true; S.returnLine = null; $('rtQty').value = ''; // 登録済みの内容はフォームに残さない（二重登録を防ぐ）
@@ -2020,7 +2020,7 @@ async function submitDispose(e) {
       $('disposeDialog').close();
       await loadInventory();
       alertBox('invMsg', `ロット ${r.lotNo} の ${fmt(r.quantity)} を${r.kind === 'DISPOSE' ? '廃棄' : '仕入先返品'}として記録しました。`, 'ok', false,
-        f.dataset.status === 'RECALLED' ? goBtn('recall', '回収管理へ戻る') : '');
+        f.dataset.status === 'RECALLED' ? (S.invScope && S.invScope.recall ? `<button type="button" class="btn btn-secondary btn-sm" data-action="openRecall" data-id="${S.invScope.recall}">回収管理へ戻る</button>` : goBtn('recall', '回収管理へ戻る')) : '');
     } catch (err) {
       const left = (err.message.match(/在庫（(\d+)）/) || [])[1];
       if (left !== undefined) { // 他の利用者が先に処分した等で在庫が変わっている
@@ -2231,7 +2231,7 @@ function renderRecall(r) {
     <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recQty >= r.shippedQty ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>
       <div class="stat"><b>${fmt(r.remainingStock)}</b><span>残在庫</span></div></div>
     ${r.activeTargets ? `<div class="meter-row"><div class="meter"><i data-w="${r.recoveredRate}"></i></div><span>回収 ${fmt(r.recQty)} / ${fmt(r.shippedQty)}${r.unrecQty ? `（回収不能 ${fmt(r.unrecQty)}）` : ''}</span></div>` : ''}
-    ${r.remainingStock > 0 ? `<div class="alert alert-warn" role="status"><div class="alert-text">回収対象ロットの在庫 ${fmt(r.remainingStock)} がまだ処分されていません${ed ? '（回収を完了する前に、廃棄・仕入先返品を記録してください）' : ''}。<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-lots="${esc(r.lots.join(','))}" data-label="${esc('回収 ' + r.recall_no + ' の対象ロット')}">在庫照会で処分する</button></div></div></div>` : ''}
+    ${r.remainingStock > 0 ? `<div class="alert alert-warn" role="status"><div class="alert-text">回収対象ロットの在庫 ${fmt(r.remainingStock)} がまだ処分されていません${ed ? '（回収を完了する前に、廃棄・仕入先返品を記録してください）' : ''}。<div class="alert-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-lots="${esc(r.lots.join(','))}" data-recall="${r.id}" data-label="${esc('回収 ' + r.recall_no + ' の対象ロット')}">在庫照会で処分する</button></div></div></div>` : ''}
     <h3 class="section-title">対象顧客</h3>${targets}
     ${ed ? `<p class="note">回収品の受入は「返品登録」で行うと回収数に自動で反映されます。</p>
       <div class="form-actions"><button type="button" class="btn btn-secondary" data-action="reextract" data-id="${r.id}">${icon('refresh')}対象を再抽出</button>
@@ -2700,7 +2700,9 @@ const ACTIONS = {
     S.invPreset = el.dataset.preset === 'lots' ? '' : el.dataset.preset;
     // 対象をはっきり決めた絞り込み（回収の対象ロット・保管場所・商品）。文字の部分一致で別のものまで出さないように
     S.invScope = el.dataset.lots || el.dataset.loc || el.dataset.prod
-      ? { lots: el.dataset.lots ? el.dataset.lots.split(',') : null, loc: el.dataset.loc || null, prod: el.dataset.prod || null, label: el.dataset.label || '' } : null;
+      ? { lots: el.dataset.lots ? el.dataset.lots.split(',') : null, loc: el.dataset.loc || null, prod: el.dataset.prod || null, label: el.dataset.label || '', recall: el.dataset.recall || null } : null;
+    // 回収案件から来たときは、「戻る」でその案件のボタンに戻れるように
+    if (el.dataset.recall) S.backFocus = { page: 'recall', sel: `article[data-id="${CSS.escape(el.dataset.recall)}"] [data-action="goInv"]` };
     // アプリが案内したボタンなので、開いているマスタ編集は確認なしで閉じる
     if ($('masterDialog').open) { $('masterForm').dataset.dirty = ''; $('masterDialog').close('cancel'); }
     alertBox('invMsg', '');

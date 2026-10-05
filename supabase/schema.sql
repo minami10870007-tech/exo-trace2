@@ -123,9 +123,11 @@ create table if not exists exo.t_lot (
   status_reason   text,
   inspected_by    text,
   inspected_at    timestamptz,
-  created_at      timestamptz not null default now(),
-  unique (supplier_id, product_id, supplier_lot_no)
+  created_at      timestamptz not null default now()
 );
+-- 同じ仕入先ロットの分納は、合格済みなら別の社内ロット（検品待ち）として受ける。検品待ちのロットは仕入先ロットごとに1つまで
+alter table exo.t_lot drop constraint if exists t_lot_supplier_id_product_id_supplier_lot_no_key;
+create unique index if not exists t_lot_open_supplier_lot_uq on exo.t_lot (supplier_id, product_id, upper(supplier_lot_no)) where status = 'QUARANTINE';
 create index if not exists t_lot_product_idx on exo.t_lot (product_id);
 
 create table if not exists exo.t_receipt (
@@ -1079,6 +1081,7 @@ declare
   v_receipt_id bigint;
   v_receipt_no text;
   v_warning text := '';
+  v_note text;
 begin
   perform exo.write_lock();
   -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
@@ -1115,21 +1118,30 @@ begin
     perform exo.fail('保管場所「' || v_loc.name || '」には入庫できません（温度区分が商品と異なるか、隔離保管場所です）。');
   end if;
 
+  -- 同じ仕入先ロット（大文字・小文字の違いは同じ）。検品待ち・無効のロットがあればそれを、なければ最新のロットを見る
   select * into v_lot from exo.t_lot
-  where supplier_id = v_supplier.id and product_id = v_product.id and upper(supplier_lot_no) = upper(v_sup_lot) for update; -- 大文字・小文字の違いは同じ仕入先ロット
-  if v_lot.id is not null then
-    if v_lot.expires_on <> v_exp then
-      perform exo.fail('仕入先ロット番号「' || v_sup_lot || '」は既に使用期限 ' || v_lot.expires_on || ' で登録されています。使用期限を確認してください。');
-    end if;
+  where supplier_id = v_supplier.id and product_id = v_product.id and upper(supplier_lot_no) = upper(v_sup_lot)
+  order by (status in ('QUARANTINE', 'VOID')) desc, id desc limit 1 for update;
+  if v_lot.id is not null and v_lot.expires_on <> v_exp then
+    perform exo.fail('仕入先ロット番号「' || v_sup_lot || '」は既に使用期限 ' || v_lot.expires_on || ' で登録されています。使用期限を確認してください。');
+  end if;
+  if v_lot.id is not null and v_lot.status in ('REJECTED', 'RECALLED', 'EXPIRED') then -- 品質上の理由で止まっているロットは受け入れない
+    perform exo.fail('仕入先ロット「' || v_lot.supplier_lot_no || '」は' || exo.code_label('lot_status', v_lot.status)
+      || '（社内ロット ' || v_lot.lot_no || '）のため入荷できません。品質責任者に確認し、仕入先へ返品してください。');
+  end if;
+  if v_lot.id is not null and v_lot.status in ('QUARANTINE', 'VOID') then
     if v_lot.status = 'VOID' then
       perform exo.set_lot_status(v_lot.id, 'QUARANTINE', '再入荷', v_user);
-    elsif v_lot.status <> 'QUARANTINE' then
-      perform exo.fail('ロット「' || v_lot.lot_no || '」は' || exo.code_label('lot_status', v_lot.status) || 'のため、簡易版では追加入荷できません。' ||
-        '（合格済ロットへの分納はQA確認が必要です。仕入先に確認のうえ別の仕入先ロット番号で登録してください）');
     end if;
     select coalesce(sum(on_hand_qty), 0) into v_stock from exo.t_inventory where lot_id = v_lot.id;
     update exo.t_lot set unit_cost = round((v_stock * unit_cost + v_qty * v_price) / (v_stock + v_qty), 2) where id = v_lot.id;
+    v_note := '検品待ちの既存ロット ' || v_lot.lot_no || ' に追加しました。';
   else
+    -- 合格・保留のロットへの分納：同じ仕入先ロットの別の社内ロット（検品待ち）として受け、改めて検品する
+    if v_lot.id is not null then
+      v_note := '仕入先ロット「' || v_lot.supplier_lot_no || '」は既にロット ' || v_lot.lot_no || '（' || exo.code_label('lot_status', v_lot.status)
+        || '）があるため、分納分を新しいロットとして登録しました。検品してください。';
+    end if;
     v_head := v_product.product_code || '-' || to_char(v_date, 'YYMMDD') || '-';
     insert into exo.t_lot (lot_no, product_id, supplier_id, supplier_lot_no, manufactured_on, expires_on, received_on, unit_cost, status)
     values (v_head || exo.seq_text(coalesce((select max(substr(lot_no, length(v_head) + 1)::integer) from exo.t_lot
@@ -1151,10 +1163,10 @@ begin
     v_warning := '到着時温度が許容範囲（' || v_loc.temp_min || '〜' || v_loc.temp_max || '℃）外です。検品時にQAが評価してください。';
   end if;
   if v_exp - v_today < v_product.min_remaining_days then -- 入荷時点で出荷できない期限
-    v_warning := concat_ws(E'\n', v_warning, '使用期限まで残り ' || (v_exp - v_today) || ' 日で、この商品の最低出荷残期間（' || v_product.min_remaining_days
+    v_warning := concat_ws(E'\n', nullif(v_warning, ''), '使用期限まで残り ' || (v_exp - v_today) || ' 日で、この商品の最低出荷残期間（' || v_product.min_remaining_days
       || ' 日）を下回るため出荷できません。使用期限を確認してください。');
   end if;
-  return exo.idem_put(p, 'register_receipt', jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning));
+  return exo.idem_put(p, 'register_receipt', jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning, 'note', v_note));
 end $$;
 
 /** ロットステータス変更（受入検品 P-02 と QA によるステータス変更 P-15）。p = { lotId, to, reason, coaConfirmed, expectedStatus } */
@@ -1434,7 +1446,7 @@ begin
       perform exo.extract_targets(v_recall);
     end loop;
   end if;
-  return exo.idem_put(p, 'register_return', jsonb_build_object('returnNo', v_return_no, 'recall', v_target.id is not null, 'disposition', v_disp));
+  return exo.idem_put(p, 'register_return', jsonb_build_object('returnNo', v_return_no, 'recall', v_target.id is not null, 'recallId', v_target.recall_id, 'disposition', v_disp));
 end $$;
 
 /**

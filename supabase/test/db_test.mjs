@@ -120,7 +120,11 @@ try {
   const released = await G.change_lot_status({ lotId: lot1.id, to: 'RELEASED', coaConfirmed: true });
   ok(released.status === 'RELEASED' && released.statusLabel === '合格' && released.inspected_at, '検品：合格（検品日時を記録）');
   await G.change_lot_status({ lotId: lot2.id, to: 'RELEASED', coaConfirmed: 'true' });
-  await throwsMsg(rcp({ supplierLotNo: 'SUP-1', receiptDate: '2026-10-04', manufacturedOn: '2026-09-01', quantity: 1, unitPrice: 1 }), /合格のため/, '合格済ロットへの分納は不可');
+  { const sp = await rcp({ supplierLotNo: 'sup-1', receiptDate: '2026-10-04', manufacturedOn: '2026-09-01', quantity: 1, unitPrice: 1 });
+    ok(/分納分を新しいロット/.test(sp.note || '') && sp.lotNo !== r1.lotNo, '合格済みの仕入先ロットへの分納は、新しい検品待ちロットとして受ける');
+    // 後のテストに影響しないよう、分納分は処分して無効にしておく
+    psql(sb.db, `select exo.move('DISPOSE', l.id, i.location_id, -1, 'test', null, 'テスト後始末', 'qa@example.com') from exo.t_lot l join exo.t_inventory i on i.lot_id = l.id where l.lot_no = '${sp.lotNo}'`);
+    psql(sb.db, `update exo.t_lot set status = 'VOID' where lot_no = '${sp.lotNo}'`); }
 
   // ---------------- 出荷 ----------------
   await throwsMsg(G.create_shipment({ customerId: lab.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 1 }] }), /販売できません/, 'BR-09 販売可否');
@@ -176,8 +180,8 @@ try {
   await throwsMsg(G.cancel_shipment({ shipmentId: s2.id, reason: 'x' }), /返品が登録されている/, '返品済みの出荷は取消不可');
 
   // ---------------- 追跡 ----------------
-  const tl = (await G.trace_lot({ query: 'sup-1' }))[0];
-  ok((await G.trace_lot({ query: 'ＳＵＰ－１' })).length === 1, '全角で入力したロット番号でも追跡できる');
+  const tl = (await G.trace_lot({ query: 'sup-1' })).find((l) => l.lot_no === r1.lotNo);
+  ok((await G.trace_lot({ query: 'ＳＵＰ－１' })).some((l) => l.lot_no === r1.lotNo), '全角で入力したロット番号でも追跡できる');
   ok(tl.shipments.length === 2 && tl.shipments.find((s) => s.customer === 'サロンB').net === 3 && tl.shipments.find((s) => s.customer === 'サロンA').net === 2, 'ロット追跡（仕入先ロット番号・部分一致）');
   ok(tl.movementTotals.RECEIPT === 20 && tl.movementTotals.SHIPMENT === -7 && tl.history.length === 2 && tl.history[0].to_status === 'QUARANTINE' && tl.history[0].changed_by === 'qa@example.com', 'ロット追跡：移動集計・履歴（作成者＝ログインユーザー）');
   ok((await G.trace_lot({ query: '%' })).length === 0, '検索語の % はワイルドカードにならない');
