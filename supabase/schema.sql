@@ -901,6 +901,7 @@ declare
 begin
   perform exo.require_user();
   perform exo.write_lock();
+  if exo.idem_get(p, 'save_master') is not null then return exo.idem_get(p, 'save_master'); end if; -- 再送なら前回の結果
   if v_table is null or v_table not in ('m_supplier', 'm_product', 'm_customer', 'm_location') then
     perform exo.fail('更新できないテーブルです: ' || coalesce(v_table, ''));
   end if;
@@ -1021,7 +1022,7 @@ begin
 
   if v_row is null then perform exo.fail('データが見つかりません。画面を再読込してください。'); end if;
   execute format('select updated_at::text from exo.%I where id = $1', v_table) into v_ver using (v_row ->> 'id')::bigint;
-  return v_row - 'created_at' || jsonb_build_object('updated_at', v_ver);
+  return exo.idem_put(p, 'save_master', v_row - 'created_at' || jsonb_build_object('updated_at', v_ver));
 end $$;
 
 /** p = { regulatoryClass, customerType, allowed } */
@@ -1150,6 +1151,7 @@ declare
   v_allowed jsonb := '{"QUARANTINE": ["RELEASED", "REJECTED", "HOLD"], "RELEASED": ["HOLD"], "HOLD": ["RELEASED", "QUARANTINE", "REJECTED"]}';
 begin
   perform exo.write_lock();
+  if exo.idem_get(p, 'change_lot_status') is not null then return exo.idem_get(p, 'change_lot_status'); end if; -- 再送なら前回の結果
   select * into v_lot from exo.t_lot where id = exo.j_id(p, 'lotId') for update;
   if v_lot.id is null then perform exo.fail('ロットが見つかりません。画面を再読込してください。'); end if;
   -- 画面を開いた後に他の利用者が状態を変えていたら、古い画面のまま判定させない
@@ -1178,7 +1180,7 @@ begin
     update exo.t_lot set inspected_by = v_user, inspected_at = now() where id = v_lot.id;
   end if;
   perform exo.set_lot_status(v_lot.id, v_to, coalesce(v_reason, '検品合格（COA確認済）'), v_user);
-  return exo.lot_view(v_lot.id);
+  return exo.idem_put(p, 'change_lot_status', exo.lot_view(v_lot.id));
 end $$;
 
 -- ---- 出荷（P-04 FEFO自動引当 ＋ P-05 出荷確定 を同時に実行） ----
@@ -1295,6 +1297,7 @@ declare
   v_recall bigint;
 begin
   perform exo.write_lock();
+  if exo.idem_get(p, 'cancel_shipment') is not null then return exo.idem_get(p, 'cancel_shipment'); end if; -- 再送なら前回の結果
   select * into v_ship from exo.t_shipment where id = exo.j_id(p, 'shipmentId') for update;
   if v_ship.id is null then perform exo.fail('出荷が見つかりません。画面を再読込してください。'); end if;
   if v_ship.status <> 'SHIPPED' then perform exo.fail('この出荷は既に取消されています。'); end if;
@@ -1310,7 +1313,7 @@ begin
   for v_recall in select distinct x from exo.t_shipment_line sl, exo.open_recall_ids(sl.lot_id) x where sl.shipment_id = v_ship.id loop
     perform exo.extract_targets(v_recall);
   end loop;
-  return exo.shipment_view(v_ship.id);
+  return exo.idem_put(p, 'cancel_shipment', exo.shipment_view(v_ship.id));
 end $$;
 
 -- ---- 返品（P-07 の簡易版：登録と処置判定を同時に行う） ----
@@ -1607,6 +1610,7 @@ declare
 begin
   perform exo.require_user();
   perform exo.write_lock();
+  if exo.idem_get(p, 'update_recall_target') is not null then return exo.idem_get(p, 'update_recall_target'); end if; -- 再送なら前回の結果
   select * into v_t from exo.t_recall_target where id = exo.j_id(p, 'targetId') for update;
   if v_t.id is null then perform exo.fail('回収対象が見つかりません。画面を再読込してください。'); end if;
   -- 画面を開いた後に他の利用者（または返品登録）が更新していたら、古い内容で上書きしない
@@ -1660,7 +1664,7 @@ begin
   update exo.t_recall_target set contacted_on = v_t.contacted_on, contact_method = v_t.contact_method,
     unrecoverable_qty = v_t.unrecoverable_qty, status = v_t.status, close_reason = v_t.close_reason, updated_at = now()
   where id = v_t.id;
-  return exo.recall_view(v_t.recall_id);
+  return exo.idem_put(p, 'update_recall_target', exo.recall_view(v_t.recall_id));
 end $$;
 
 /** p = { recallId } */
@@ -1673,6 +1677,7 @@ declare
 begin
   perform exo.require_user();
   perform exo.write_lock();
+  if exo.idem_get(p, 'close_recall') is not null then return exo.idem_get(p, 'close_recall'); end if; -- 再送なら前回の結果
   select * into v_recall from exo.t_recall where id = exo.j_id(p, 'recallId') for update;
   if v_recall.id is null then perform exo.fail('回収案件が見つかりません。画面を再読込してください。'); end if;
   if v_recall.status = 'CLOSED' then perform exo.fail('既に完了しています。'); end if;
@@ -1680,8 +1685,8 @@ begin
   if v_open > 0 then perform exo.fail('未完了の回収対象顧客が ' || v_open || ' 件あるため完了できません。'); end if;
   update exo.t_recall set status = 'CLOSED', closed_on = exo.today() where id = v_recall.id;
   v_view := exo.recall_view(v_recall.id);
-  return v_view || jsonb_build_object('warning', case when (v_view ->> 'remainingStock')::integer > 0
-    then '回収対象ロットに未処分の在庫（' || (v_view ->> 'remainingStock') || '）が残っています。' else '' end);
+  return exo.idem_put(p, 'close_recall', v_view || jsonb_build_object('warning', case when (v_view ->> 'remainingStock')::integer > 0
+    then '回収対象ロットに未処分の在庫（' || (v_view ->> 'remainingStock') || '）が残っています。' else '' end));
 end $$;
 
 -- -----------------------------------------------------------------------------

@@ -165,7 +165,9 @@ function rpcError(res, data) {
 
 // 登録系の処理と、その入力フォーム。応答が届かずにもう一度確定しても二重に登録されないよう、
 // フォームの内容を変えるまでは同じ依頼番号（requestId）を送る（サーバーは同じ番号なら前回の結果を返す）
-const WRITE_FORM = { createShipment: 'shipForm', registerReceipt: 'receiptForm', registerReturn: 'rtForm', disposeStock: 'disposeForm', createRecall: 'recallForm' };
+const WRITE_FORM = { createShipment: 'shipForm', registerReceipt: 'receiptForm', registerReturn: 'rtForm', disposeStock: 'disposeForm', createRecall: 'recallForm',
+  saveMaster: 'masterForm', updateRecallTarget: (p) => 'tg_' + p.targetId, changeLotStatus: (p) => 'lot_' + p.lotId,
+  cancelShipment: (p) => 'cs_' + p.shipmentId, closeRecall: (p) => 'cr_' + p.recallId };
 const MSG_UNSURE = '通信が途切れたため、登録できたか確認できませんでした。入力内容はそのままで、もう一度確定してください（二重に登録されることはありません。登録済みなら、その結果を表示します）。';
 function newId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -177,12 +179,19 @@ S.req = {};
 S.unsure = {}; // 登録できたか分からないまま終わったフォーム（再送は画面側のチェックを省いてサーバーに任せる）
 /** フォームの内容が変わったら、次の確定は新しい依頼として送る */
 function resetRequest(formId) { delete S.req[formId]; delete S.unsure[formId]; }
+/** 入力した欄が属するフォーム・回収対象・検品カードの依頼番号を捨てる */
+function resetScopeOf(el) {
+  if (!el || !el.closest) return;
+  const fm = el.closest('form'); if (fm && fm.id) resetRequest(fm.id);
+  const tg = el.closest('.target'); if (tg && tg.id) resetRequest(tg.id);
+  if (el.dataset && el.dataset.id && /^(to|rs|coa)_/.test(el.id)) resetRequest('lot_' + el.dataset.id);
+}
 /** 前回の確定が「登録できたか分からない」まま、内容を変えずに再送しようとしているか */
 const resending = (formId) => !!(S.unsure[formId] && S.req[formId]);
 
 async function api(fn, ...args) {
   const p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
-  const form = WRITE_FORM[fn];
+  const form = typeof WRITE_FORM[fn] === 'function' ? WRITE_FORM[fn](p) : WRITE_FORM[fn];
   if (form) p.requestId = S.req[form] || (S.req[form] = newId());
   const online = navigator.onLine;
   let sent = false;
@@ -964,7 +973,8 @@ function guideNext() {
   if (G_STATE.step >= LAST) { closeGuide(); return; }
   G_STATE.step++;
   renderGuide();
-  $('guideNext').focus();
+  const go = $('guideGo'); // まだ済んでいないステップでは「…の画面を開く」に（Enter で手順を飛ばさないように）
+  (!go.hidden && go.classList.contains('btn-primary') ? go : $('guideNext')).focus();
 }
 
 /** ステップの画面を開き、画面上部に「ガイドに戻る」を出す */
@@ -1288,10 +1298,12 @@ async function changeStatus(btn) {
       const reason0 = $('rs_' + id) ? $('rs_' + id).value : '';
       const lotNo0 = card0 ? card0.querySelector('.lot-no').textContent : '';
       await loadInspect().catch(() => {});
-      const gone = /他の利用者/.test(err.message) && !$('to_' + id);
+      const gone = (/他の利用者/.test(err.message) || err.unsure) && !$('to_' + id);
       if (gone) { S.insFocusLot = lotNo0; S.insReason = { id, reason: reason0, to: $('to_' + id) ? '' : to }; }
       const typed = !$('rs_' + id) && reason0.trim() ? `\n入力していた理由：${reason0.trim()}` : ''; // 欄が消えても、入力した理由を写せるように
-      alertBox('insMsg', (gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + '今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message) + typed, 'ng', false,
+      const text = gone && err.unsure ? `通信が途切れましたが、ロット ${lotNo0} の判定は登録されていた可能性があります（一覧から外れました）。「すべて」で状態を確認してください。`
+        : gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + '今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message;
+      alertBox('insMsg', text + typed, 'ng', false,
         gone ? '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>' : '');
     }
   });
@@ -1515,8 +1527,10 @@ async function cancelShip(btn) {
         const done = $('shDone').firstElementChild;
         if (done && done.dataset.no === btn.dataset.no) alertBox('shDone', `出荷 ${btn.dataset.no} は取消済みです（他の利用者が取消しました）。`, 'warn', true);
       }
-      toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
-      focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent'));
+      const row = $('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`);
+      if (err.unsure && fresh && row && !row.querySelector('[data-action="cancelShip"]')) toast(`出荷 ${btn.dataset.no} の取消は完了していました`); // 通信は切れたが取消できていた
+      else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
+      focusTo(row || $('shRecent'));
     }
   });
 }
@@ -1854,10 +1868,11 @@ async function openDispose(btn) {
   f.dataset.dirty = '';
   // 別の在庫の処分は別の依頼。前回が「登録できたか分からない」まま同じ在庫を開き直したときは、同じ依頼として送る（二重に記録しない）
   const key = btn.dataset.lotId + ':' + btn.dataset.locId;
-  if (!(resending('disposeForm') && f.dataset.key === key)) resetRequest('disposeForm');
+  const keep = resending('disposeForm') && f.dataset.key === key; // 入力した内容もそのまま戻す（同じ依頼として送れるように）
+  if (!keep) resetRequest('disposeForm');
   f.dataset.key = key;
   f.dataset.status = btn.dataset.status;
-  f.reset();
+  if (!keep) f.reset();
   f.dataset.lotId = btn.dataset.lotId;
   f.dataset.locId = btn.dataset.locId;
   f.querySelectorAll('[aria-invalid]').forEach((el) => el.removeAttribute('aria-invalid'));
@@ -1866,7 +1881,8 @@ async function openDispose(btn) {
   f.dataset.loc = btn.dataset.loc;
   setDisposeStock(btn.dataset.qty, false);
   // 回収・不合格・期限切れは全数を処分することが多いので、最初から全数を入れておく
-  if (!btn.dataset.ok) $('dpQty').value = btn.dataset.qty;
+  if (!btn.dataset.ok && !keep) $('dpQty').value = btn.dataset.qty;
+  if (keep) alertBox('dpMsg', '前回の記録が届いたか確認できなかったため、同じ内容を表示しています。そのまま「処分を記録する」を押してください（二重に記録されることはありません）。', 'warn', true);
   G_STATE.disposeOpener = btn;
   $('disposeDialog').showModal();
   $('dpKind').focus();
@@ -1885,6 +1901,7 @@ async function submitDispose(e) {
   }
   await busy(e.submitter, async () => {
     try {
+      f.dataset.stockAtSend = $('dpQty').max; // 記録できたか分からなくなったとき、在庫の増減で確かめるため
       const r = await api('disposeStock', { lotId: f.dataset.lotId, locationId: f.dataset.locId, quantity: $('dpQty').value, kind: $('dpKind').value, reason: $('dpReason').value });
       $('disposeDialog').close();
       await loadInventory();
@@ -2339,6 +2356,7 @@ function editMaster(id) {
   $('masterTitle').textContent = def.label + (id ? 'の編集' : 'の新規登録');
   $('masterForm').dataset.id = id || '';
   $('masterForm').dataset.dirty = '';
+  resetRequest('masterForm'); // 開き直したら新しい依頼
   $('masterForm').dataset.ver = (id && r.updated_at) || ''; // 開いたときの版。保存時に他の人の更新を上書きしないか確認する
   alertBox('masterMsg', '');
   const isCode = (k) => k.endsWith('_code') && k !== 'medical_inst_code';
@@ -2441,8 +2459,11 @@ async function saveRule(chk, isUndo) {
       if (c) { c.checked = !value; saveRule(c, true); }
     } });
   } catch (err) {
-    document.querySelectorAll(`.ruleChk[data-rc="${rc}"][data-ct="${ct}"]`).forEach((c) => { c.checked = !value; });
-    toast(err.message, 'ng');
+    // サーバーの実際の値に合わせる（通信が途切れたときは保存されている場合があるため、反対に戻すだけにしない）
+    let real = !value;
+    try { S.M = await api('getMasters'); const r = S.M.salesRules.find((x) => x.regulatory_class === rc && x.customer_type === ct); if (r) real = String(r.allowed) === 'true'; } catch (e2) { /* 読めなければ元に戻す */ }
+    document.querySelectorAll(`.ruleChk[data-rc="${rc}"][data-ct="${ct}"]`).forEach((c) => { c.checked = real; });
+    toast(real === value ? '通信が途切れましたが、保存されていました：' + `${code('regulatory_class', rc)} → ${code('customer_type', ct)}：${value ? '販売可' : '販売不可'}` : err.message, real === value ? '' : 'ng');
   } finally {
     document.querySelectorAll(`.ruleChk[data-rc="${rc}"][data-ct="${ct}"]`).forEach((c) => { c.disabled = false; });
     if (document.activeElement === document.body && chk.isConnected) chk.focus(); // 保存中に外れたフォーカスを戻す
@@ -2494,8 +2515,17 @@ const ACTIONS = {
     const form = dlg.querySelector('form');
     if (dlg.id === 'disposeDialog' && S.unsure.disposeForm) { // 記録できたか分からないまま閉じる：在庫を最新にして確かめてもらう
       dlg.close('cancel');
+      const f = $('disposeForm');
       await loadInventory().catch(() => {});
-      alertBox('invMsg', '処分を記録できたか確認できませんでした。在庫照会の数量が減っていれば記録済みです。減っていなければ、もう一度「処分」から記録してください。', 'warn');
+      // 在庫の数量を見比べて、記録できていたかを伝える
+      const row = (S.inventory || []).find((r) => String(r.lot_id) === f.dataset.lotId && String(r.location_id) === f.dataset.locId);
+      const before = Number(f.dataset.stockAtSend), after = row ? Number(row.qty) : 0;
+      if (after < before) {
+        resetRequest('disposeForm');
+        alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていました（在庫 ${fmt(before)} → ${fmt(after)}）。`, 'ok');
+      } else {
+        alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていません（在庫 ${fmt(after)}）。もう一度「処分」から記録してください（同じ内容で開きます）。`, 'warn');
+      }
       return;
     }
     if (form && form.dataset.dirty === '1' && dlg.id !== 'dialog') {
@@ -2608,7 +2638,7 @@ function clearGoneNotice() {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
-  const fm = t.closest && t.closest('form'); if (fm && fm.id) resetRequest(fm.id);
+  resetScopeOf(t);
   setTimeout(clearGoneNotice, 0);
   if (t.id && CODE_FIELD.test(t.id) && t.value && half(t.value) !== t.value) t.value = half(t.value);
   if (t.getAttribute && t.getAttribute('aria-invalid') === 'true' && (String(t.value || '').trim() || !t.required)) clearInvalid(t);
@@ -2638,7 +2668,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('input', (e) => {
-  const fm = e.target.closest && e.target.closest('form'); if (fm && fm.id) resetRequest(fm.id); // 内容を変えたら別の依頼
+  resetScopeOf(e.target); // 内容を変えたら別の依頼
   if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && (String(e.target.value || '').trim() || !e.target.required)) clearInvalid(e.target);
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();

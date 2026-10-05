@@ -62,6 +62,9 @@ try {
 
   // ---------------- マスタ ----------------
   const sup = await G.save_master({ table: 'm_supplier', data: { supplier_code: 'S001', name: '仕入先A', is_active: true } });
+  { const rq = '7a1c2e8a-1b2c-4d3e-8f90-123456789abc', d = { table: 'm_supplier', requestId: rq, data: { supplier_code: 'S0R1', name: '再送テスト', is_active: true } };
+    const a = await G.save_master(d), b = await G.save_master(d);
+    ok(a.id === b.id && psql(sb.db, "select count(*) from exo.m_supplier where supplier_code = 'S0R1'") === '1', 'マスタ保存の再送は二重登録にならず、前回の結果を返す'); }
   const prod = await G.save_master({ table: 'm_product', data: { product_code: 'EXO-A', name: 'エクソソーム原液A', storage_class: 'M80', shelf_life_days: 730,
     min_remaining_days: 90, regulatory_class: 'COSMETIC_RAW', list_price: 30000, reorder_point: 5, is_active: true } });
   const salon = await G.save_master({ table: 'm_customer', data: { customer_code: 'C001', name: 'サロンA', customer_type: 'SALON', address: '東京', email: 'a@salon.jp', is_active: true } });
