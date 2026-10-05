@@ -697,7 +697,7 @@ function closeSheet(restore) {
   if (restore === true) $('moreBtn').focus(); // 閉じるだけのとき（Esc・✕・外側）は「メニュー」ボタンに戻す（移動したときは画面側がフォーカスする）
 }
 
-async function reloadMasters() {
+async function reloadMasters(opts = {}) {
   const old = S.M;
   S.M = await api('getMasters');
   S.mAt = Date.now();
@@ -732,7 +732,8 @@ async function reloadMasters() {
       sel.setAttribute('aria-invalid', 'true');
     }
   });
-  const say = (msg, list) => { if (list.length) alertBox(msg, `${list.filter(Boolean).map((x) => `「${x}」`).join('、')}は、他の利用者が無効にしたため選択を外しました。選び直してください。`, 'warn', true); };
+  const who = opts.self ? 'マスタで無効にした' : '他の利用者が無効にした';
+  const say = (msg, list) => { if (list.length) { alertBox(msg, `${list.filter(Boolean).map((x) => `「${x}」`).join('、')}は、${who}ため選択を外しました。選び直してください。`, 'warn', true); $(msg).dataset.gone = '1'; } };
   say('rcMsg', gone.rcMsg); say('shMsg', gone.shMsg);
 }
 
@@ -1208,10 +1209,11 @@ function addLine() {
     <div class="field"><label for="slq${n}">数量</label><input class="slQty" id="slq${n}" type="number" inputmode="numeric" min="1" step="1" aria-describedby="sla${n}"><div class="line-avail" id="sla${n}" aria-live="polite"></div></div>
     <div class="field"><label for="slr${n}">単価（円・税抜）</label><input class="slPrice" id="slr${n}" type="number" inputmode="decimal" min="0" step="0.01" aria-describedby="slh${n}"><div class="field-hint price-hint" id="slh${n}" hidden></div></div>
     <button type="button" class="btn btn-ghost btn-sm line-remove" data-action="removeLine" aria-label="この明細を削除">${icon('x')}削除</button>`;
+  const first = !$('shLines').children.length;
   $('shLines').appendChild(div);
-  // 有効な商品が1つだけなら、最初から選んでおく（入荷・顧客と同じ）
+  // 有効な商品が1つだけなら、最初の明細では選んでおく（入荷・顧客と同じ）。追加した明細は空のまま（使わなければ無視される）
   const sel = div.querySelector('.slProd');
-  if (S.M && sel.options.length === 2) { sel.value = sel.options[1].value; const p = S.M.products.find((x) => String(x.id) === sel.value); div.querySelector('.slPrice').value = p && p.list_price !== null && p.list_price !== undefined ? p.list_price : ''; setPriceHint(div, p); }
+  if (first && S.M && sel.options.length === 2) { sel.value = sel.options[1].value; const p = S.M.products.find((x) => String(x.id) === sel.value); div.querySelector('.slPrice').value = p && p.list_price !== null && p.list_price !== undefined ? p.list_price : ''; setPriceHint(div, p); updateLineAvail(div); }
 }
 
 async function submitShipment(e) {
@@ -1351,7 +1353,7 @@ function updateLineAvail(line, byUser) {
   out.textContent = blocked || (n === null ? '' : `引当可能 ${fmt(n)}`);
   out.classList.toggle('short', !!blocked || (n !== null && qty > n));
   // 直したら赤い印とエラー表示を消す
-  if (!blocked) line.querySelector('.slProd').removeAttribute('aria-invalid');
+  if (pid && !blocked) line.querySelector('.slProd').removeAttribute('aria-invalid'); // 商品を選び直したときだけ印を消す
   if (!(n !== null && qty > n) && qty > 0) line.querySelector('.slQty').removeAttribute('aria-invalid');
   // サーバーのエラーが出ている状態で入力を直したら、もう一度確定するよう案内する
   if (byUser && $('shMsg').dataset.client !== '1' && $('shMsg').querySelector('.alert-ng') && !$('shMsg').dataset.changed) {
@@ -2206,15 +2208,16 @@ async function saveMasterForm(e) {
   // 既存データのコードを変えるときは念のため確認する（Enter での誤保存に備える）
   const codeKey = MASTER[t].fields[0][0];
   const before = data.id && S.masterOrig ? String(S.masterOrig[codeKey] || '') : '';
-  if (before && before.toUpperCase() !== String(data[codeKey]).trim().toUpperCase() &&
-      !(await ask({ title: 'コードを変更しますか？', body: `コードを「${before}」から「${String(data[codeKey]).trim()}」に変更します。`, okText: '変更して保存' }))) return;
+  if (before && before !== String(data[codeKey]).trim() &&
+      !(await ask({ title: 'コードを変更しますか？', body: `コードを「${before}」から「${String(data[codeKey]).trim()}」に変更します。` +
+        (before.toUpperCase() === String(data[codeKey]).trim().toUpperCase() ? '\n（コードは大文字にそろえて保存します）' : ''), okText: '変更して保存' }))) return;
   await busy(e.submitter, async () => {
     try {
       await api('saveMaster', t, data);
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
       guideAfterAction();
-      await reloadMasters();
+      await reloadMasters({ self: true });
       await loadMaster();
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
@@ -2371,7 +2374,14 @@ const ACTIONS = {
   reload: async (el) => busy(el, async () => {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
-  addLine, removeLine: (el) => { el.closest('.line').remove(); if (!$('shLines').children.length) addLine(); },
+  addLine, removeLine: (el) => {
+    const line = el.closest('.line'), prev = line.previousElementSibling;
+    line.remove();
+    if (!$('shLines').children.length) addLine();
+    // 削除したあとのフォーカス：前の明細の商品、無ければ最初の明細の商品
+    (prev || $('shLines').firstElementChild).querySelector('.slProd').focus();
+    setTimeout(clearGoneNotice, 0);
+  },
   changeStatus, cancelShip, selectReturnLine: async (el) => {
     // 入力中の明細から別の明細に切り替えるときは確認する（数量・理由は消える）
     if (S.returnLine && S.returnLine !== el.dataset.id && unsavedScreens().includes('返品登録')
@@ -2406,8 +2416,16 @@ document.addEventListener('keydown', (e) => {
   }
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('tr[data-action]')) { e.preventDefault(); ACTIONS[e.target.dataset.action](e.target); }
 });
+/** 「選択を外しました」の案内は、外した欄をすべて選び直したら消す */
+function clearGoneNotice() {
+  [['shMsg', 'shipForm'], ['rcMsg', 'receiptForm']].forEach(([m, f]) => {
+    if ($(m).dataset.gone === '1' && !$(f).querySelector('[aria-invalid="true"]')) { alertBox(m, ''); $(m).dataset.gone = ''; }
+  });
+}
+
 document.addEventListener('change', (e) => {
   const t = e.target;
+  setTimeout(clearGoneNotice, 0);
   if (t.id && CODE_FIELD.test(t.id) && t.value && half(t.value) !== t.value) t.value = half(t.value);
   if (t.getAttribute && t.getAttribute('aria-invalid') === 'true' && (String(t.value || '').trim() || !t.required)) clearInvalid(t);
   if (t.id === 'guideRulesChk') { saveRulesChecked(t); return; }

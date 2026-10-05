@@ -355,7 +355,7 @@ for (const vp of VIEWPORTS) {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
     const forms = page.locator('#rclList .target-edit');
     if ((await forms.count()) < 2) return; // 対象顧客が1件しかないデータでは確認しない
-    for (const i of [0, 1]) { const d = forms.nth(i); if (!(await d.getAttribute('open'))) await d.locator('summary').click(); }
+    for (const i of [0, 1]) { const d = forms.nth(i); if (!(await d.evaluate((x) => x.open))) await d.locator('summary').click(); }
     await forms.nth(1).locator('input[id^="cr_"]').fill('入力途中のメモ');
     await forms.nth(0).locator('select[id^="cm_"]').selectOption('メール');
     await forms.nth(0).locator('[data-action="saveTarget"]').click(); await waitText('#toasts', /保存しました/); await idle(page);
@@ -427,6 +427,11 @@ for (const vp of VIEWPORTS) {
       await waitText('#shMsg', /無効にしたため選択を外しました/);
       if (await page.inputValue('.slProd')) throw new Error('無効な商品が選ばれたまま');
       if ((await page.getAttribute('.slProd', 'aria-invalid')) !== 'true') throw new Error('商品欄に印がない');
+      await page.waitForTimeout(1000);
+      if ((await page.getAttribute('.slProd', 'aria-invalid')) !== 'true') throw new Error('商品欄の印がすぐ消える');
+      await page.selectOption('.slProd', { index: 1 }); await page.waitForTimeout(200);
+      if (/選択を外しました/.test(await page.textContent('#shMsg'))) throw new Error('選び直しても案内が残る');
+      await page.selectOption('.slProd', '');
     } finally { psql(server.sb.db, `update exo.m_product set is_active = true where id = ${pid}`); await page.evaluate(() => { S.mAt = 0; }); }
     await page.fill('.slQty', ''); await page.fill('.slPrice', '');
     const left = await page.evaluate(() => unsavedScreens().join() + ' / ' + [...document.querySelectorAll('#shLines .slQty')].map((x) => x.value).join('|') + ' / ' + document.getElementById('shNote').value);
@@ -517,7 +522,7 @@ for (const vp of VIEWPORTS) {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
     const d = page.locator('#rclList .target-edit').first();
     if (await d.count()) {
-      if (!(await d.getAttribute('open'))) await d.locator('summary').click();
+      if (!(await d.evaluate((x) => x.open))) await d.locator('summary').click();
       const tid = await d.locator('[data-action="saveTarget"]').getAttribute('data-id');
       await page.selectOption('#cm_' + tid, '訪問');
       psql(server.sb.db, `update exo.t_recall_target set contact_method = '電話', updated_at = now() where id = ${tid}`);
