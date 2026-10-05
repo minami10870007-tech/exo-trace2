@@ -143,7 +143,9 @@ try {
   const s2 = await G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 5 }] });
   ok(s2.lines.every((l) => l.lot_no === r1.lotNo) && s2.shipment_no === 'SH-202610-0002', 'lot2 が尽きた後は lot1 から引当');
   ok((await G.get_shipment_by_no({ no: ' sh-202610-0002 ' })).id === s2.id, '出荷番号で検索（大文字小文字・空白を無視）');
-  await throwsMsg(G.get_shipment_by_no({ no: 'SH-0' }), /見つかりません/, '出荷番号が無い');
+  await throwsMsg(G.get_shipment_by_no({ no: 'SH-9' }), /見つかりません/, '出荷番号が無い');
+  ok((await G.get_shipment_by_no({ no: '0002' })).id === s2.id, '出荷番号の一部でも1件に絞れれば開く');
+  await throwsMsg(G.get_shipment_by_no({ no: 'SH-2026' }), /2 件あります/, '複数該当なら絞り込みを促す');
 
   // ---------------- 返品 ----------------
   const lineB = s2.lines[0];

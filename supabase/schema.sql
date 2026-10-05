@@ -828,10 +828,18 @@ language plpgsql stable security definer set search_path = '' as $$
 declare
   v_no text := upper(coalesce(exo.j_text(p, 'no'), ''));
   v_id bigint;
+  v_count integer;
 begin
   perform exo.require_user();
   if v_no = '' then perform exo.fail('出荷番号を入力してください。'); end if;
   select id into v_id from exo.t_shipment where upper(shipment_no) = v_no;
+  if v_id is null then
+    -- 一部だけ入力された場合（例 0003）：1件に絞れればその出荷を開く
+    select count(*), min(id) into v_count, v_id from exo.t_shipment where strpos(upper(shipment_no), v_no) > 0;
+    if v_count > 1 then
+      perform exo.fail('「' || exo.j_text(p, 'no') || '」を含む出荷が ' || v_count || ' 件あります。出荷番号をもう少し詳しく入力するか、一覧から選んでください。');
+    end if;
+  end if;
   if v_id is null then perform exo.fail('出荷番号「' || exo.j_text(p, 'no') || '」が見つかりません。'); end if;
   return exo.shipment_view(v_id);
 end $$;

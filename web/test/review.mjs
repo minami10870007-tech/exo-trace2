@@ -461,6 +461,24 @@ for (const vp of VIEWPORTS) {
     if (!(await page.isVisible('#page-master'))) throw new Error('画面が移動した');
     await page.click('#masterForm [data-action="dialogCancel"]'); await page.click('#dialogOk'); await page.waitForFunction(() => !document.getElementById('masterDialog').open);
   });
+  await step('処分：他の利用者が全部処分したら、記録できない状態にして「閉じる」だけにする', async () => {
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="inventory"]'); await idle(page);
+    const b = page.locator('#invBody [data-action="openDispose"]').first();
+    const lotId = await b.getAttribute('data-lot-id'), locId = await b.getAttribute('data-loc-id'), qty = await b.getAttribute('data-qty');
+    if (await b.getAttribute('data-ok')) { await b.click(); await page.click('#dialogOk'); } else await b.click();
+    await page.waitForSelector('#disposeDialog[open]');
+    await page.selectOption('#dpKind', 'DISPOSE'); await page.fill('#dpQty', '1'); await page.fill('#dpReason', 'テスト');
+    psql(server.sb.db, `update exo.t_inventory set on_hand_qty = 0 where lot_id = ${lotId} and location_id = ${locId}`);
+    try {
+      await page.click('#disposeForm button[value="ok"]'); await waitText('#dpMsg', /先に処分/);
+      if (!(await page.isDisabled('#disposeForm button[value="ok"]'))) throw new Error('記録ボタンが押せる');
+      if (!/在庫 0（最新）/.test(await page.textContent('#disposeInfo'))) throw new Error('説明が古い: ' + (await page.textContent('#disposeInfo')));
+      await page.click('#disposeForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('disposeDialog').open);
+    } finally {
+      psql(server.sb.db, `update exo.t_inventory set on_hand_qty = ${qty} where lot_id = ${lotId} and location_id = ${locId}`);
+    }
+  });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
     if (n !== '1') throw new Error('created_by がログインユーザーでない');
@@ -518,7 +536,12 @@ for (const vp of VIEWPORTS) {
     await page.fill('#loginPassword', DEMO_USER.password); await page.click('#loginForm button[type="submit"]');
     await page.waitForSelector('#app:not([hidden])'); await idle(page);
   });
-  await step('ログアウト', async () => { await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]'); await page.waitForSelector('#login:not([hidden])'); });
+  await step('ログアウト', async () => {
+    await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]');
+    if (await page.$('#dialog[open]')) await page.click('#dialogOk');
+    await page.waitForSelector('#login:not([hidden])');
+    if (await page.evaluate(() => sessionStorage.getItem('exo-return-draft'))) throw new Error('返品の下書きが残っている');
+  });
   await step('パスワード誤り', async () => {
     await page.fill('#loginEmail', DEMO_USER.email); await page.fill('#loginPassword', 'wrong-password');
     await page.click('#loginForm button[type="submit"]'); await waitText('#loginMsg', /。/);
