@@ -118,8 +118,17 @@ try {
   ok(s1.shipment_no === 'SH-202610-0001' && s1.amount === 4 * 30000 + 3 * 28000 && s1.customer === 'サロンA', '出荷番号・金額');
   await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 100 }] }), /不足 82/, '在庫不足は全体を登録しない');
   ok((await G.get_recent_shipments({ limit: 30 })).length === 1, '在庫不足時は出荷が作成されない（ロールバック）');
-  // 最低出荷残期間（90日）：出荷日 2027-04-15 では lot2（2027-06-30、残76日）は引当対象外
-  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2028-06-15', lines: [{ productId: prod.id, quantity: 1 }] }), /残期間 90日以上/, '最低出荷残期間');
+  // 最低出荷残期間：700日にすると lot2（残269日）・lot1（残697日）とも引当対象外
+  await G.save_master({ table: 'm_product', data: { ...prod, min_remaining_days: 700 } });
+  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 1 }] }), /残期間 700日以上/, '最低出荷残期間');
+  await G.save_master({ table: 'm_product', data: { ...prod } });
+  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-05', lines: [{ productId: prod.id, quantity: 1 }] }), /当日以前/, '未来日の出荷は不可');
+  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-07-05', lines: [{ productId: prod.id, quantity: 1 }] }), /過去90日以内/, '古すぎる出荷日は不可');
+  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', note: 'x'.repeat(2001), lines: [{ productId: prod.id, quantity: 1 }] }), /長すぎ/, '長すぎる入力');
+  await throwsMsg(rcp({ supplierLotNo: 'X', receiptDate: '2026-10-01', expiresOn: '2028-01-01', quantity: 1, unitPrice: '999999999999.999' }), /大きすぎ/, '丸め後の桁あふれ');
+  await throwsMsg(rcp({ supplierLotNo: 'BIG', receiptDate: '2026-10-01', expiresOn: '2028-01-01', quantity: 1000000000, unitPrice: 1 }).then(() =>
+    rcp({ supplierLotNo: 'BIG', receiptDate: '2026-10-01', expiresOn: '2028-01-01', quantity: 1, unitPrice: 1 })), /上限/, '在庫数の上限');
+  ok(psql(sb.db, "select exo.next_no('SH', '2026-10-01', array['SH-202610-9999'])") === 'SH-202610-10000', '連番が桁あふれしても重複しない');
   const s2 = await G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 5 }] });
   ok(s2.lines.every((l) => l.lot_no === r1.lotNo) && s2.shipment_no === 'SH-202610-0002', 'lot2 が尽きた後は lot1 から引当');
   ok((await G.get_shipment_by_no({ no: ' sh-202610-0002 ' })).id === s2.id, '出荷番号で検索（大文字小文字・空白を無視）');
@@ -183,6 +192,14 @@ try {
   const closed = await G.close_recall({ recallId: rc.id });
   ok(closed.status === 'CLOSED' && closed.closed_on === '2026-10-04' && /未処分の在庫/.test(closed.warning), '回収完了（残在庫の警告）');
   await throwsMsg(G.update_recall_target({ targetId: tA.id, status: 'CONTACTED' }), /完了した回収案件/, '完了後は更新不可');
+  // 同じロットの2回目の回収：前回回収済みの数量は対象にしない
+  const rc2 = await G.create_recall({ title: '再回収', reason: '追加調査', severity: 'III', lotIds: [lot1.id] });
+  const tB3 = rc2.targets.find((t) => t.customer === 'サロンB');
+  // サロンB：出荷5 − 通常返品2 − 前回の回収品2 = 1（前回「回収不能」とした1本は今回も対象）
+  ok(rc2.recall_no === 'RCL-2026-002' && tB3.shipped_qty === 1 && tB3.recovered_qty === 0 && tB3.status === 'NOT_CONTACTED', '2回目の回収：前回回収済みの数量は除外');
+  await throwsMsg(G.create_recall({ title: '重複', reason: 'x', severity: 'III', lotIds: [lot1.id] }), /対応中の回収案件の対象/, '対応中の回収と同じロットは不可');
+  await G.update_recall_target({ targetId: tB3.id, unrecoverableQty: 1, closeReason: '' });
+  await G.close_recall({ recallId: rc2.id });
 
   // ---------------- 状態遷移 ----------------
   await throwsMsg(G.change_lot_status({ lotId: lot1.id, to: 'RELEASED', coaConfirmed: true }), /変更できません/, 'RECALLED からは変更不可');
@@ -213,7 +230,10 @@ try {
   const dc2 = JSON.parse(psql(sb.db, 'select exo.daily_check()'));
   ok(dc2.mismatches.length === 1 && dc2.mismatches[0].on_hand - dc2.mismatches[0].movement_total === 999, '在庫不整合を検出');
   const d2 = await G.get_dashboard();
-  ok(d2.lastCheck && d2.lastCheck.mismatches.length === 1 && d2.lastCheck.ran_at, 'ダッシュボードに日次チェック結果');
+  ok(d2.lastCheck && d2.lastCheck.mismatches.length === 1 && d2.lastCheck.ran_at && d2.checkStale === false, 'ダッシュボードに日次チェック結果');
+  psql(sb.db, "update exo.t_job_log set ran_at = now() - interval '2 days'");
+  ok((await G.get_dashboard()).checkStale === true, '日次チェックが止まっていたら警告');
+  ok(psql(sb.db, "select count(*) from information_schema.role_routine_grants where routine_schema = 'exo' and grantee in ('PUBLIC', 'anon', 'authenticated')") === '0', 'exo の関数は PUBLIC に実行権限なし');
   ok(psql(sb.db, "select count(*) from pg_proc where proname = 'daily_check' and pronamespace = 'exo'::regnamespace") === '1', '日次チェック関数');
 
   console.log(`ALL ${passed} CHECKS PASSED`);

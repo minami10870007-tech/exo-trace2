@@ -155,7 +155,8 @@ function rpcError(res, data) {
   if (data.code === 'PGRST202' || res.status === 404) {
     return new Error('データベースの準備ができていません。Supabase の SQL Editor で supabase/schema.sql を実行してください。');
   }
-  return new Error('サーバーでエラーが発生しました（' + (data.message || res.status) + '）。時間をおいて再度お試しください。');
+  if (data.code === '57014') return new Error('処理に時間がかかりすぎたため中断しました。少し待ってから、もう一度お試しください。');
+  return new Error('サーバーでエラーが発生しました（' + (data.code || res.status) + '）。時間をおいて再度お試しください。');
 }
 
 async function api(fn, ...args) {
@@ -492,7 +493,8 @@ async function loadDashboard() {
   const mismatch = lc && lc.mismatches && lc.mismatches.length ? `<div class="alert alert-ng span-full" role="alert">在庫数と在庫移動履歴が一致しない在庫が ${lc.mismatches.length} 件あります（日次チェック ${esc(lc.ran_at)}）。\n` +
     lc.mismatches.slice(0, 5).map((m) => `${esc(m.lot_no)}／${esc(m.location)}：在庫 ${fmt(m.on_hand)}・履歴合計 ${fmt(m.movement_total)}`).join('\n') +
     (lc.mismatches.length > 5 ? '\nほか ' + (lc.mismatches.length - 5) + ' 件' : '') + '\n管理者に確認してください。</div>' : '';
-  $('dashBody').innerHTML = mismatch +
+  const stale = d.checkStale ? `<div class="alert alert-warn span-full" role="status">日次チェック（期限切れの判定・在庫の照合）が24時間以上実行されていません${lc ? `（最終 ${esc(lc.ran_at)}）` : ''}。\nSupabase の「Integrations」→「Cron」に exo-trace-daily-check があるか、管理者に確認を依頼してください。</div>` : '';
+  $('dashBody').innerHTML = mismatch + stale +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
       d.lowStock.map((x) => ({ cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +

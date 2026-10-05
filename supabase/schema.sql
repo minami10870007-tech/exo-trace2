@@ -367,9 +367,13 @@ end $$;
 
 /** 更新処理を1本ずつ実行する（設計書 P-00 の簡易版：全更新処理を直列化） */
 create or replace function exo.write_lock() returns void
-language sql volatile set search_path = '' as $$
-  select pg_advisory_xact_lock(7428301)
-$$;
+language plpgsql volatile set search_path = '' as $$
+begin
+  perform set_config('lock_timeout', '5s', true);
+  perform pg_advisory_xact_lock(7428301);
+exception when lock_not_available then
+  perform exo.fail('ほかの人の処理が混み合っています。少し待ってから、もう一度お試しください。');
+end $$;
 
 -- ---- 入力値の取り出し（画面から来た JSON） ----
 
@@ -378,33 +382,42 @@ language sql immutable set search_path = '' as $$
   select nullif(btrim(p_value, E' \t\r\n' || chr(12288)), '')
 $$;
 
+create or replace function exo.fail_text(p_message text) returns text
+language plpgsql volatile set search_path = '' as $$
+begin
+  raise exception using errcode = 'P0001', message = p_message;
+end $$;
+
 /** 文字列（前後の空白を除去、空なら null） */
 create or replace function exo.j_text(p jsonb, k text) returns text
-language sql immutable set search_path = '' as $$
+language sql stable set search_path = '' as $$
   select case when p is null or jsonb_typeof(p) <> 'object' or jsonb_typeof(p -> k) is null or jsonb_typeof(p -> k) = 'null' then null
+              when length(p ->> k) > 2000 then exo.fail_text('入力が長すぎます（2000文字以内で入力してください）。')
               else exo.trim_text(p ->> k) end
 $$;
 
 /** 数値（未入力は null、数値でなければ NaN） */
 create or replace function exo.j_num(p jsonb, k text) returns numeric
-language plpgsql immutable set search_path = '' as $$
+language plpgsql stable set search_path = '' as $$
 declare v text := exo.j_text(p, k);
 begin
   if v is null then return null; end if;
   if v !~ '^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$' or length(v) > 30 then return 'NaN'; end if;
-  return v::numeric;
-exception when others then
-  return 'NaN';
+  begin
+    return v::numeric;
+  exception when others then
+    return 'NaN';
+  end;
 end $$;
 
 /** ID（数字でなければ null） */
 create or replace function exo.j_id(p jsonb, k text) returns bigint
-language sql immutable set search_path = '' as $$
+language sql stable set search_path = '' as $$
   select case when exo.j_text(p, k) ~ '^\d{1,18}$' then exo.j_text(p, k)::bigint end
 $$;
 
 create or replace function exo.j_bool(p jsonb, k text) returns boolean
-language sql immutable set search_path = '' as $$
+language sql stable set search_path = '' as $$
   select coalesce(lower(exo.j_text(p, k)) in ('true', '1'), false)
 $$;
 
@@ -428,10 +441,16 @@ begin
   return p_value::integer;
 end $$;
 
+/** 連番の文字列（桁数に満たなければ0埋め。桁あふれしても切り捨てない） */
+create or replace function exo.seq_text(p_n integer, p_width integer) returns text
+language sql immutable set search_path = '' as $$
+  select lpad(p_n::text, greatest(p_width, length(p_n::text)), '0')
+$$;
+
 /** 伝票番号 例: SH-202610-0001 */
 create or replace function exo.next_no(p_prefix text, p_date date, p_existing text[]) returns text
 language sql immutable set search_path = '' as $$
-  select p_prefix || '-' || to_char(p_date, 'YYYYMM') || '-' || lpad((coalesce(max(substr(n, length(p_prefix) + 9)::integer), 0) + 1)::text, 4, '0')
+  select p_prefix || '-' || to_char(p_date, 'YYYYMM') || '-' || exo.seq_text(coalesce(max(substr(n, length(p_prefix) + 9)::integer), 0) + 1, 4)
   from unnest(p_existing) n
   where n like p_prefix || '-' || to_char(p_date, 'YYYYMM') || '-%' and substr(n, length(p_prefix) + 9) ~ '^\d+$'
 $$;
@@ -443,6 +462,9 @@ language plpgsql volatile set search_path = '' as $$
 declare v_cur integer;
 begin
   select on_hand_qty into v_cur from exo.t_inventory where lot_id = p_lot_id and location_id = p_location_id for update;
+  if coalesce(v_cur, 0)::bigint + p_qty > 1000000000 then
+    perform exo.fail('在庫数が上限（10億）を超えるため登録できません。');
+  end if;
   if coalesce(v_cur, 0) + p_qty < 0 then
     perform exo.fail('在庫が不足しています（ロット ' || coalesce((select lot_no from exo.t_lot where id = p_lot_id), p_lot_id::text) ||
       '、保管場所 ' || coalesce((select name from exo.m_location where id = p_location_id), p_location_id::text) || '）。');
@@ -571,8 +593,11 @@ begin
   select status into v_status from exo.t_recall where id = p_recall_id for update;
   if v_status is null or v_status = 'CLOSED' then return; end if;
   for rec in
-    with net as (  -- 顧客 × ロットの出荷正味数量（出荷 − 通常返品）
-      select s.customer_id, sl.lot_id, sum(sl.quantity - exo.returned_qty(sl.id, false))::integer as qty
+    with net as (  -- 顧客 × ロットの出荷正味数量（出荷 − この回収以外の返品。別の回収で回収済みの分も除く）
+      select s.customer_id, sl.lot_id,
+        sum(sl.quantity - coalesce((select sum(r.quantity) from exo.t_return r
+              where r.shipment_line_id = sl.id and (r.recall_target_id is null or r.recall_target_id not in
+                (select t2.id from exo.t_recall_target t2 where t2.recall_id = p_recall_id))), 0))::integer as qty
       from exo.t_shipment_line sl
       join exo.t_shipment s on s.id = sl.shipment_id
       where sl.status = 'SHIPPED' and sl.lot_id in (select lot_id from exo.t_recall_lot where recall_id = p_recall_id)
@@ -589,7 +614,7 @@ begin
       values (p_recall_id, rec.customer_id, rec.lot_id, rec.qty,
         case when rec.qty > 0 then 'NOT_CONTACTED' else 'CLOSED' end,
         case when rec.qty > 0 then null else '自動：出荷正味0' end);
-    elsif rec.qty = 0 and rec.recovered_qty = 0 then
+    elsif rec.qty = 0 and rec.recovered_qty = 0 and rec.status <> 'CLOSED' then
       update exo.t_recall_target set shipped_qty = 0, unrecoverable_qty = 0, status = 'CLOSED', close_reason = '自動：出荷正味0', updated_at = now()
       where id = rec.target_id;
     else
@@ -702,7 +727,8 @@ begin
       where x.available <= x.reorder_point), '[]'),
     'recalls', coalesce((select jsonb_agg(exo.recall_view(r.id) order by r.id) from exo.t_recall r where r.status <> 'CLOSED'), '[]'),
     'lastCheck', (select jsonb_build_object('ran_at', exo.fmt_ts(j.ran_at)) || j.result from exo.t_job_log j
-                  where j.job = 'daily_check' order by j.ran_at desc, j.id desc limit 1));
+                  where j.job = 'daily_check' order by j.ran_at desc, j.id desc limit 1),
+    'checkStale', not exists (select 1 from exo.t_job_log j where j.job = 'daily_check' and j.ran_at > now() - interval '26 hours'));
 end $$;
 
 /** p = { statuses: [...] }（空なら全件） */
@@ -950,6 +976,7 @@ begin
     perform exo.fail('仕入単価は0以上で入力してください。');
   end if;
   v_price := round(v_price, 2);
+  if v_price >= 1000000000000 then perform exo.fail('仕入単価が大きすぎます。'); end if;
   if v_sup_lot is null then perform exo.fail('仕入先ロット番号を入力してください。'); end if;
   if length(v_sup_lot) > 100 then perform exo.fail('仕入先ロット番号は100文字以内で入力してください。'); end if;
   if v_date is null or v_date > v_today then perform exo.fail('入荷日は当日以前の日付を入力してください。'); end if;
@@ -985,8 +1012,8 @@ begin
   else
     v_head := v_product.product_code || '-' || to_char(v_date, 'YYMMDD') || '-';
     insert into exo.t_lot (lot_no, product_id, supplier_id, supplier_lot_no, manufactured_on, expires_on, received_on, unit_cost, status)
-    values (v_head || lpad((coalesce((select max(substr(lot_no, length(v_head) + 1)::integer) from exo.t_lot
-                                      where left(lot_no, length(v_head)) = v_head and substr(lot_no, length(v_head) + 1) ~ '^\d{1,9}$'), 0) + 1)::text, 2, '0'),
+    values (v_head || exo.seq_text(coalesce((select max(substr(lot_no, length(v_head) + 1)::integer) from exo.t_lot
+                                      where left(lot_no, length(v_head)) = v_head and substr(lot_no, length(v_head) + 1) ~ '^\d{1,9}$'), 0) + 1, 2),
       v_product.id, v_supplier.id, v_sup_lot, v_mfg, v_exp, v_date, v_price, 'QUARANTINE')
     returning * into v_lot;
     insert into exo.t_lot_status_history (lot_id, from_status, to_status, reason, changed_by)
@@ -1076,6 +1103,9 @@ begin
   if v_customer.id is null then perform exo.fail('顧客が見つかりません。画面を再読込してください。'); end if;
   if not v_customer.is_active then perform exo.fail('無効な顧客には出荷できません。'); end if;
   if v_shipped_on is null then perform exo.fail('出荷日を入力してください。'); end if;
+  if v_shipped_on > exo.today() or v_shipped_on < exo.today() - 90 then
+    perform exo.fail('出荷日は当日以前（過去90日以内）の日付を入力してください。');
+  end if;
   if jsonb_typeof(p -> 'lines') = 'array' then
     select coalesce(jsonb_agg(x order by o), '[]') into v_lines
     from jsonb_array_elements(p -> 'lines') with ordinality as e(x, o)
@@ -1093,6 +1123,7 @@ begin
     v_price := coalesce(exo.j_num(v_line, 'unitPrice'), v_product.list_price, 0);
     if v_price = 'NaN' or v_price < 0 or v_price >= 1000000000000 then perform exo.fail(v_i || '行目の単価が不正です。'); end if;
     v_price := round(v_price, 2);
+    if v_price >= 1000000000000 then perform exo.fail(v_i || '行目の単価が不正です。'); end if;
     if not exists (select 1 from exo.m_sales_rule r where r.regulatory_class = v_product.regulatory_class
                    and r.customer_type = v_customer.customer_type and r.allowed) then
       perform exo.fail('商品「' || v_product.name || '」（' || exo.code_label('regulatory_class', v_product.regulatory_class) ||
@@ -1106,7 +1137,7 @@ begin
       join exo.t_lot l on l.id = i.lot_id
       join exo.m_location loc on loc.id = i.location_id
       where l.product_id = v_product.id and l.status = 'RELEASED' and not loc.is_quarantine and i.on_hand_qty > 0
-        and l.expires_on - v_shipped_on >= v_product.min_remaining_days
+        and l.expires_on - exo.today() >= v_product.min_remaining_days  -- 残期間は当日基準（過去日付の出荷で期限切れ在庫を引き当てない）
       order by l.expires_on, l.received_on, loc.id, l.id
       for update of i
     loop
@@ -1348,6 +1379,7 @@ declare
   v_today date := exo.today();
   v_recall_id bigint;
   v_recall_no text;
+  v_title_dup text;
   l record;
 begin
   perform exo.write_lock();
@@ -1364,8 +1396,14 @@ begin
   if exists (select 1 from exo.t_lot where id = any (v_ids) and status = 'VOID') then
     perform exo.fail('無効（VOID）のロットは回収対象に指定できません。');
   end if;
-  v_recall_no := 'RCL-' || to_char(v_today, 'YYYY') || '-' || lpad((coalesce((select max(substr(recall_no, 10)::integer) from exo.t_recall
-    where recall_no like 'RCL-' || to_char(v_today, 'YYYY') || '-%' and substr(recall_no, 10) ~ '^\d{1,9}$'), 0) + 1)::text, 3, '0');
+  select string_agg('ロット ' || lt.lot_no || '（' || r.recall_no || '）', '、' order by lt.lot_no) into v_title_dup
+  from exo.t_recall_lot rl join exo.t_recall r on r.id = rl.recall_id join exo.t_lot lt on lt.id = rl.lot_id
+  where rl.lot_id = any (v_ids) and r.status <> 'CLOSED';
+  if v_title_dup is not null then
+    perform exo.fail(v_title_dup || ' は対応中の回収案件の対象です。その案件で対応するか、完了してから新しい回収を登録してください。');
+  end if;
+  v_recall_no := 'RCL-' || to_char(v_today, 'YYYY') || '-' || exo.seq_text(coalesce((select max(substr(recall_no, 10)::integer) from exo.t_recall
+    where recall_no like 'RCL-' || to_char(v_today, 'YYYY') || '-%' and substr(recall_no, 10) ~ '^\d{1,9}$'), 0) + 1, 3);
   insert into exo.t_recall (recall_no, title, reason, severity, started_on, status, created_by)
   values (v_recall_no, v_title, v_reason, v_severity, v_today, 'OPEN', v_user)
   returning id into v_recall_id;
@@ -1495,7 +1533,8 @@ begin
 end $$;
 revoke all on all tables in schema exo from anon, authenticated;
 revoke all on all sequences in schema exo from anon, authenticated;
-revoke all on all functions in schema exo from anon, authenticated;
+revoke all on all functions in schema exo from public, anon, authenticated;
+alter default privileges in schema exo revoke execute on functions from public;
 revoke all on schema exo from anon, authenticated;
 
 -- -----------------------------------------------------------------------------
@@ -1527,8 +1566,11 @@ begin
     create extension if not exists pg_cron with schema pg_catalog;
     perform cron.schedule('exo-trace-daily-check', '0 16 * * *', 'select exo.daily_check()');
   else
-    raise notice 'pg_cron が無いため日次チェックの自動実行は設定しませんでした。';
+    raise warning 'pg_cron が無いため日次チェックの自動実行は設定しませんでした（ダッシュボードに警告が出ます）。';
   end if;
 exception when others then
-  raise notice '日次チェックの自動実行を設定できませんでした: %', sqlerrm;
+  raise warning '日次チェックの自動実行を設定できませんでした: %', sqlerrm;
 end $$;
+
+-- 導入・更新の直後に1回実行しておく（ダッシュボードの「日次チェック未実行」警告を出さないため）
+do $$ begin perform exo.daily_check(); end $$;
