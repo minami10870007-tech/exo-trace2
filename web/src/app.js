@@ -620,6 +620,14 @@ function setUrl(h, push) {
   S.lastHash = h;
   S.pageHash[(h.match(/^#\/(\w+)/) || [])[1]] = h;
 }
+/** 全角の英数字・記号を半角に（日本語入力のまま打ったコード・番号でも検索・登録できるように）。dash=true ならハイフン類も「-」に */
+function half(v, dash = true) {
+  const x = String(v || '').normalize('NFKC').trim();
+  return dash ? x.replace(/[ー－―‐−–—]/g, '-') : x;
+}
+/** コード・番号の欄（ここに入った全角は半角に直す） */
+const CODE_FIELD = /^(tlQuery|rtShipNo|rcSupLot|mf_\w*(code|phone|email)\w*)$/;
+
 /** URL の値を読む（壊れた URL でもエラーにしない） */
 function dec(v) { try { return decodeURIComponent(v); } catch (e) { return String(v).replace(/%/g, ''); } }
 /** URL を開く（同じ URL ならその画面を読み込み直す） */
@@ -671,16 +679,20 @@ function go(id) {
   goUrl(S.pageHash[id] || '#/' + id); // 前に開いていた検索・出荷があれば、それを開く
 }
 
+const BEHIND_SHEET = () => [document.querySelector('.sidebar'), document.querySelector('.topbar'), $('main'), $('bottomNav'), document.querySelector('.skip-link')].filter(Boolean);
 function openSheet() {
   $('sheetBackdrop').hidden = false;
   $('moreSheet').hidden = false;
+  BEHIND_SHEET().forEach((x) => { x.inert = true; }); // 開いている間は、後ろの画面にフォーカスが移らないように
   const cur = $('sheetNav').querySelector('[aria-current="page"]') || $('sheetNav').querySelector('button');
   if (cur) cur.focus();
 }
-function closeSheet() {
+function closeSheet(restore) {
   if ($('moreSheet').hidden) return;
   $('sheetBackdrop').hidden = true;
   $('moreSheet').hidden = true;
+  BEHIND_SHEET().forEach((x) => { x.inert = false; });
+  if (restore === true) $('moreBtn').focus(); // 閉じるだけのとき（Esc・✕・外側）は「メニュー」ボタンに戻す（移動したときは画面側がフォーカスする）
 }
 
 async function reloadMasters() {
@@ -959,8 +971,8 @@ async function loadDashboard() {
   if (!setupState().lots && !d.recalls.length) { // ロットが無いうちは空のカードを並べない（準備の案内に集中）
     const hidden = !$('dashSetup').innerHTML; // 「はじめにやること」を非表示にしたときも、次にやることが分かるようにする
     $('dashBody').innerHTML = mismatch + stale + (hidden ? `<div class="card span-full">${empty('まだロットがありません', 'box')}
-      <p class="note">入荷を登録すると、検品待ち・使用期限・在庫の状況がここに表示されます。</p>
-      <div class="empty-actions">${goBtn('receipt', '入荷登録へ')}<button type="button" class="btn btn-secondary btn-sm" data-action="guideOpen">ガイドを開く</button>
+      <p class="note center">入荷を登録すると、検品待ち・使用期限・在庫の状況がここに表示されます。</p>
+      <div class="empty-actions">${(() => { const t = firstTodo(setupState()); return t >= 0 && GUIDE[t].key !== 'lots' ? `<button type="button" class="btn btn-primary btn-sm" data-action="guideStep" data-step="${t}">次の準備：${esc(GUIDE[t].short)}</button>` : goBtn('receipt', '入荷登録へ'); })()}<button type="button" class="btn btn-secondary btn-sm" data-action="guideOpen">ガイドを開く</button>
       <button type="button" class="btn btn-ghost btn-sm" data-action="showSetup">「はじめにやること」を再表示</button></div></div>` : '');
     return;
   }
@@ -998,6 +1010,7 @@ function autoExpiry() {
 
 async function submitReceipt(e) {
   e.preventDefault();
+  if ($('rcSupLot').value) $('rcSupLot').value = half($('rcSupLot').value);
   if (!checkRequired($('receiptForm'), 'rcMsg')) return;
   // 数量・日付の規則をまとめて確認し、問題のある欄をすべて示す
   const q = Number($('rcQty').value), d = $('rcDate').value, exp = $('rcExp').value, mfg = $('rcMfg').value;
@@ -1324,6 +1337,7 @@ async function cancelShip(btn) {
 // ======================================================================
 async function findShipmentForReturn(e, keepMsg, fromUrl) {
   if (e) e.preventDefault();
+  $('rtShipNo').value = half($('rtShipNo').value);
   if (!keepMsg) alertBox('rtFindMsg', '');
   alertBox('rtMsg', '');
   // 入力途中の返品を閉じる前に確認する（下書きは残るので「戻る」でも戻せる）
@@ -1395,6 +1409,7 @@ async function loadTraceRecent() {
 async function renderTraceChips() {
   const lots = (await api('getLots', [])).sort((a, b) => String(b.received_on).localeCompare(String(a.received_on)) || b.id - a.id).slice(0, 8);
   if ($('tlBody').querySelector('.lot-card')) return; // 読み込み中に検索された
+  if (!lots.length) { $('tlRecent').innerHTML = `<div class="empty">${icon('box')}まだロットがありません</div><p class="note center">入荷を登録すると、ロットごとに入荷から販売先までを追跡できます。</p><div class="empty-actions">${goBtn('receipt', '入荷を登録する')}</div>`; return; }
   $('tlRecent').innerHTML = lots.length ? `<h3 class="section-title">最近のロット</h3><div class="recent-chips">${lots.map((l) =>
     `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(l.lot_no)}">${esc(l.lot_no)}</button>`).join('')}</div>` : '';
 }
@@ -1467,6 +1482,7 @@ async function loadReturnRecent() {
   // URL に出荷番号が無い（「戻る」で一覧に戻った）ときは、出荷の表示を閉じて最近の出荷を出す
   // （入力途中の内容は下書きに残っているので、「進む」で戻せる）
   if ($('rtShipment').innerHTML && unsavedScreens().includes('返品登録')) toast(`出荷 ${S.rtNo} の入力途中の内容は、「進む」で戻せます`);
+  if (!$('rtShipment').innerHTML && !S.rtNo) { alertBox('rtFindMsg', ''); $('rtShipNo').removeAttribute('aria-invalid'); } // 前の検索のエラーを残さない
   if ($('rtShipment').innerHTML) { $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null; S.rtNo = ''; $('rtShipNo').value = ''; alertBox('rtMsg', ''); alertBox('rtFindMsg', ''); }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
   $('rtRecent').innerHTML = `<h3 class="section-title">最近の出荷</h3>` + table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '', cls: 'actions' }],
@@ -1554,7 +1570,8 @@ async function submitReturn(e) {
         const kept = restoreReturnForm(saved);
         if (!kept) { // 明細がもう返品できない（出荷の取消など）：入力内容は登録されていないことをはっきり伝える
           writeDraft(S.rtNo, null);
-          alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。入力した返品内容は登録されていません。', 'ng');
+          alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。入力した返品内容は登録されていません。', 'ng', false,
+            '<button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の出荷を選ぶ</button>');
           return;
         }
         alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng', true);
@@ -1594,7 +1611,7 @@ const INV_PRESETS = {
 };
 
 function renderInventory() {
-  const q = $('invFilter').value.trim().toUpperCase();
+  const q = half($('invFilter').value, false).toUpperCase(); // 名前に「ー」を含むので、ハイフンへの置き換えはしない
   const avail = $('invAvail').checked;
   const preset = INV_PRESETS[S.invPreset];
   $('invPreset').innerHTML = preset ? `<span class="preset-chip">絞り込み：${esc(preset.label)}<button type="button" class="icon-btn" data-action="clearInvPreset" aria-label="絞り込みを解除">${icon('x')}</button></span>` : '';
@@ -1611,6 +1628,8 @@ function renderInventory() {
     { empty: S.inventory.length || preset || terms.length ? 'この条件に一致する在庫はありません' : '在庫はありません' });
   if (!rows.length && (preset || terms.length || avail)) {
     $('invBody').insertAdjacentHTML('beforeend', '<div class="empty-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="clearInvAll">絞り込みを解除</button></div>');
+  } else if (!S.inventory.length) { // まだ在庫が無い：入荷から始める
+    $('invBody').insertAdjacentHTML('beforeend', `<p class="note center">入荷を登録して検品で合格にすると、ここに在庫が表示されます。</p><div class="empty-actions">${goBtn('receipt', '入荷を登録する')}</div>`);
   }
 }
 
@@ -1700,6 +1719,7 @@ const MOVE_LABEL = { RECEIPT: '入荷', SHIPMENT: '出荷', CANCEL: '出荷取�
 
 async function searchLot(e, fromUrl) {
   e.preventDefault();
+  $('tlQuery').value = half($('tlQuery').value);
   if (!$('tlQuery').value.trim()) {
     $('tlQuery').setAttribute('aria-invalid', 'true');
     $('tlBody').innerHTML = '<div class="alert alert-ng" role="alert">ロット番号を入力するか、上の「最近のロット」から選んでください。</div>';
@@ -1758,7 +1778,7 @@ const nowText = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo',
 
 /** 顧客追跡：表示中の結果があれば、開き直したときに最新の状態で出し直す */
 async function loadCustomerTrace() {
-  if (!active(S.M.customers).length) { // 顧客が未登録なら、空の選択欄だけにせず登録先を案内する
+  if (!S.M.customers.length) { // 顧客が未登録なら、空の選択欄だけにせず登録先を案内する
     $('tcBody').innerHTML = '';
     alertBox('tcMsg', '顧客追跡を使うには、先に顧客を「マスタ設定」で登録してください。', 'info', true,
       '<button type="button" class="btn btn-secondary btn-sm" data-action="goMaster" data-table="m_customer">顧客を登録する</button>');
@@ -2121,6 +2141,7 @@ async function saveMasterForm(e) {
   }
   if (!e.submitter || e.submitter.value !== 'save') return; // 変更が無ければキャンセル・閉じるはそのまま閉じる
   e.preventDefault();
+  $('masterFields').querySelectorAll('input').forEach((x) => { if (CODE_FIELD.test(x.id) && x.value) x.value = half(x.value); });
   const t = S.masterTable, data = { id: $('masterForm').dataset.id || null, expected_updated_at: $('masterForm').dataset.ver || null };
   if (!checkRequired($('masterFields'), 'masterMsg')) return;
   MASTER[t].fields.forEach(([k, , type]) => { data[k] = type === 'bool' ? $('mf_' + k).checked : $('mf_' + k).value; });
@@ -2196,7 +2217,7 @@ async function saveRule(chk, isUndo) {
 // ======================================================================
 const ACTIONS = {
   go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
-  openSheet, closeSheet,
+  openSheet, closeSheet: () => closeSheet(true),
   logout: async () => {
     closeSheet();
     if (hasUnsavedInput() && !(await ask({ title: 'ログアウトしますか？', body: `保存していない入力内容があります（${unsavedScreens().join('・')}）。ログアウトすると消えます。`, okText: 'ログアウトする', danger: true }))) return;
@@ -2314,7 +2335,7 @@ document.addEventListener('click', (e) => {
   if (fn) { e.preventDefault(); fn(el, e); }
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeSheet();
+  if (e.key === 'Escape' && !$('moreSheet').hidden) closeSheet(true);
   // タブ（絞り込み・マスタの種類）：← → で移動して選ぶ
   const tab = e.target.closest && e.target.closest('[role="tab"]');
   if (tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
@@ -2329,6 +2350,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
+  if (t.id && CODE_FIELD.test(t.id) && t.value && half(t.value) !== t.value) t.value = half(t.value);
   if (t.getAttribute && t.getAttribute('aria-invalid') === 'true' && (String(t.value || '').trim() || !t.required)) clearInvalid(t);
   if (t.id === 'guideRulesChk') { saveRulesChecked(t); return; }
   if (t.id === 'mf_customer_type') syncMedicalCode();
@@ -2393,7 +2415,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     if (await ask({ title: '変更を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('masterDialog').close();
   });
-  $('sheetBackdrop').addEventListener('click', closeSheet);
+  $('sheetBackdrop').addEventListener('click', () => closeSheet(true));
   // ガイドは閉じ方（はじめる・あとで見る・Esc）にかかわらず「見た」と記録する
   $('guideDialog').addEventListener('close', onGuideClosed);
   $('guideDialog').addEventListener('keydown', (e) => {

@@ -145,6 +145,7 @@ try {
   ok((await G.get_shipment_by_no({ no: ' sh-202610-0002 ' })).id === s2.id, '出荷番号で検索（大文字小文字・空白を無視）');
   await throwsMsg(G.get_shipment_by_no({ no: 'SH-9' }), /見つかりません/, '出荷番号が無い');
   ok((await G.get_shipment_by_no({ no: '0002' })).id === s2.id, '出荷番号の一部でも1件に絞れれば開く');
+  ok((await G.get_shipment_by_no({ no: 'ＳＨ－２０２６１０－０００２' })).id === s2.id, '全角で入力した出荷番号でも開く');
   await throwsMsg(G.get_shipment_by_no({ no: 'SH-2026' }), /2 件あります/, '複数該当なら絞り込みを促す');
 
   // ---------------- 返品 ----------------
@@ -164,6 +165,7 @@ try {
 
   // ---------------- 追跡 ----------------
   const tl = (await G.trace_lot({ query: 'sup-1' }))[0];
+  ok((await G.trace_lot({ query: 'ＳＵＰ－１' })).length === 1, '全角で入力したロット番号でも追跡できる');
   ok(tl.shipments.length === 2 && tl.shipments.find((s) => s.customer === 'サロンB').net === 3 && tl.shipments.find((s) => s.customer === 'サロンA').net === 2, 'ロット追跡（仕入先ロット番号・部分一致）');
   ok(tl.movementTotals.RECEIPT === 20 && tl.movementTotals.SHIPMENT === -7 && tl.history.length === 2 && tl.history[0].to_status === 'QUARANTINE' && tl.history[0].changed_by === 'qa@example.com', 'ロット追跡：移動集計・履歴（作成者＝ログインユーザー）');
   ok((await G.trace_lot({ query: '%' })).length === 0, '検索語の % はワイルドカードにならない');

@@ -391,6 +391,11 @@ begin
 end $$;
 
 /** 文字列（前後の空白を除去、空なら null） */
+-- 全角の英数字・記号を半角・大文字に（日本語入力のまま打った番号でも検索できるように）
+create or replace function exo.half_code(v text) returns text language sql immutable set search_path = '' as $$
+  select upper(translate(normalize(btrim(coalesce(v, '')), nfkc), 'ー－―‐−–—', '-------'))
+$$;
+
 create or replace function exo.j_text(p jsonb, k text) returns text
 language sql stable set search_path = '' as $$
   select case when p is null or jsonb_typeof(p) <> 'object' or jsonb_typeof(p -> k) is null or jsonb_typeof(p -> k) = 'null' then null
@@ -826,7 +831,7 @@ end $$;
 create or replace function public.get_shipment_by_no(p jsonb default '{}') returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
 declare
-  v_no text := upper(coalesce(exo.j_text(p, 'no'), ''));
+  v_no text := exo.half_code(exo.j_text(p, 'no'));
   v_id bigint;
   v_count integer;
 begin
@@ -1412,7 +1417,7 @@ end $$;
 /** ロット番号（社内・仕入先どちらでも、部分一致）→ 出荷先顧客。p = { query } */
 create or replace function public.trace_lot(p jsonb default '{}') returns jsonb
 language plpgsql stable security definer set search_path = '' as $$
-declare v_q text := upper(coalesce(exo.j_text(p, 'query'), ''));
+declare v_q text := exo.half_code(exo.j_text(p, 'query'));
 begin
   perform exo.require_user();
   if v_q = '' then perform exo.fail('ロット番号を入力してください。'); end if;

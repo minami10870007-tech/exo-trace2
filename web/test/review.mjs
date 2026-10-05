@@ -408,6 +408,17 @@ for (const vp of VIEWPORTS) {
     }
     await page.fill('.slQty', ''); await page.fill('#shNote', '');
   });
+  await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
+    await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
+    await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
+    await page.waitForSelector('#tlBody .lot-card', { timeout: 10000 }).catch(() => { throw new Error('全角のロット番号で見つからない'); });
+    if ((await page.inputValue('#tlQuery')) !== 'EXO-UC50') throw new Error('半角に直っていない: ' + (await page.inputValue('#tlQuery')));
+    if (await page.isVisible('#moreBtn')) {
+      await page.click('#moreBtn'); await page.keyboard.press('Escape');
+      if (!(await page.evaluate(() => document.activeElement && document.activeElement.id === 'moreBtn'))) throw new Error('Esc で閉じたあとフォーカスがメニューボタンに戻らない');
+      if (await page.evaluate(() => document.getElementById('main').inert)) throw new Error('閉じたあとも操作できない');
+    }
+  });
   await step('「戻る」：ロット追跡・返品・顧客追跡で前の表示に戻り、画面から出られる', async () => {
     const hash = () => page.evaluate(() => location.hash);
     const waitHash = (re) => page.waitForFunction((src) => new RegExp(src).test(location.hash), re.source, { timeout: 10000 }).catch(async () => { throw new Error('URL が ' + (await hash()) + '（期待 ' + re + '）'); });

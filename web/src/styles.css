@@ -844,3 +844,4 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 /* ---- UX round 18 ---- */
 .bottom-nav button { white-space: nowrap; padding: 0 2px; }
 #disposeForm button[value="ok"]:disabled { opacity: 1; background: var(--surface-2); color: var(--text-3); border-color: var(--border); box-shadow: none; }
+.note.center { text-align: center; }
