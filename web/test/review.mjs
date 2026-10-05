@@ -383,6 +383,28 @@ for (const vp of VIEWPORTS) {
     if (Number(psql(server.sb.db, 'select count(*) from exo.t_shipment')) !== n) throw new Error('出荷が登録された');
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page); await page.fill('.slQty', ''); // 後のテストの再読み込みで「離れますか？」を出さないため
   });
+  await step('出荷：サーバーのエラーは消えずに残り、原因の欄に印が付く', async () => {
+    await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
+    await page.selectOption('#shCustomer', { index: 1 }); await page.selectOption('.slProd', { index: 1 }); await page.fill('.slQty', '1');
+    if (!(await page.inputValue('.slPrice'))) await page.fill('.slPrice', '1000');
+    await page.fill('#shDate', '2030-01-01');
+    await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /出荷日/);
+    await page.waitForTimeout(1500);
+    if (!/出荷日/.test(await page.textContent('#shMsg'))) throw new Error('エラーが消えた');
+    if ((await page.getAttribute('#shDate', 'aria-invalid')) !== 'true') throw new Error('出荷日に印がない');
+    await page.fill('#shDate', await page.evaluate(() => S.cfg.today)); await page.fill('.slQty', ''); await page.fill('#shNote', '');
+  });
+  await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
+    await page.fill('#rtShipNo', 'SH-202610-0003'); await page.click('#rtSearch button[type="submit"]'); await idle(page); await page.waitForTimeout(500);
+    await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
+    await page.fill('#rtQty', '999'); await page.selectOption('#rtQLoc', { index: 1 }).catch(() => {}); await page.fill('#rtReason', 'テスト');
+    if (!(await page.inputValue('#rtDisp')) && !(await page.isDisabled('#rtDisp'))) await page.selectOption('#rtDisp', 'DISPOSE');
+    await page.click('#rtForm button[type="submit"]');
+    if (await page.isHidden('#rtForm')) throw new Error('フォームが消えた');
+    if (!/1〜/.test(await page.textContent('#rtMsg'))) throw new Error(await page.textContent('#rtMsg'));
+    await page.click('[data-action="cancelReturn"]'); await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
+  });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
     if (n !== '1') throw new Error('created_by がログインユーザーでない');

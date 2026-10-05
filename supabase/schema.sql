@@ -572,7 +572,7 @@ language sql stable set search_path = '' as $$
     'lots', coalesce((select jsonb_agg(l.lot_no order by l.lot_no) from exo.t_recall_lot rl join exo.t_lot l on l.id = rl.lot_id
                       where rl.recall_id = r.id), '[]'::jsonb),
     'targets', coalesce((select jsonb_agg(jsonb_build_object(
-        'id', t.id, 'recall_id', t.recall_id, 'customer_id', t.customer_id, 'lot_id', t.lot_id,
+        'id', t.id, 'recall_id', t.recall_id, 'customer_id', t.customer_id, 'lot_id', t.lot_id, 'updated_at', t.updated_at::text,
         'shipped_qty', t.shipped_qty, 'recovered_qty', t.recovered_qty, 'unrecoverable_qty', t.unrecoverable_qty,
         'contacted_on', t.contacted_on, 'contact_method', t.contact_method, 'status', t.status, 'close_reason', t.close_reason,
         'customer', t.customer, 'customer_code', t.customer_code, 'contact_name', t.contact_name, 'phone', t.phone,
@@ -1545,6 +1545,10 @@ begin
   perform exo.write_lock();
   select * into v_t from exo.t_recall_target where id = exo.j_id(p, 'targetId') for update;
   if v_t.id is null then perform exo.fail('回収対象が見つかりません。画面を再読込してください。'); end if;
+  -- 画面を開いた後に他の利用者（または返品登録）が更新していたら、古い内容で上書きしない
+  if exo.j_text(p, 'expectedUpdatedAt') is not null and exo.j_text(p, 'expectedUpdatedAt') <> v_t.updated_at::text then
+    perform exo.fail('この顧客の回収状況は、他の利用者または返品登録で更新されています。最新の状態を表示しました。入力した内容を確認して、もう一度保存してください。');
+  end if;
   select status into v_recall_status from exo.t_recall where id = v_t.recall_id;
   if v_recall_status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません。'); end if;
   if p ? 'contactedOn' then

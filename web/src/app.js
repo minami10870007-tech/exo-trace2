@@ -364,6 +364,7 @@ function showLogin(message, canRetry) {
   closeSheet();
   if ($('dialog').open) $('dialog').close();
   if ($('masterDialog').open) $('masterDialog').close();
+  if ($('disposeDialog').open) $('disposeDialog').close();
   if ($('guideDialog').open) { G_STATE.navigating = true; $('guideDialog').removeEventListener('close', onGuideClosed); $('guideDialog').close(); $('guideDialog').addEventListener('close', onGuideClosed); }
   $('app').hidden = true;
   $('login').hidden = false;
@@ -382,6 +383,7 @@ function endLocal(message) {
 /** expired=true：有効期限切れ。入力中の内容と開いていた画面はそのまま残し、同じ人が再ログインしたら続きから使えるようにする */
 function logout(message, expired) {
   const sess = S.sess;
+  S.pendingDialog = expired ? captureDialog() : null;
   S.sess = null;
   storage(false, S.user ? { user: S.user } : null); // 次回ログイン用にメールアドレスだけ残す
   // サーバー側のセッションも無効化（失敗しても画面はログアウトする）
@@ -390,6 +392,48 @@ function logout(message, expired) {
   showLogin(typeof message === 'string' ? message : '');
 }
 const MSG_EXPIRED_KEEP = 'ログインの有効期限が切れました。直前の操作は保存されていません。\nもう一度ログインすると、入力中の内容のまま元の画面に戻ります。';
+
+/** まだ保存していない入力があるか（ページを離れる・ログアウトする前の確認用） */
+function hasUnsavedInput() {
+  const receipt = ['rcSupLot', 'rcQty', 'rcPrice'].some((id) => $(id).value.trim());
+  const ship = $('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim());
+  const ret = !$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim());
+  const recall = $('rcTitle').value.trim() || $('rcReason').value.trim() || snapshotTargetForms().some((t) => t.fields.length);
+  const dlg = ($('masterDialog').open && $('masterForm').dataset.dirty === '1') || ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1');
+  return !!(receipt || ship || ret || recall || dlg);
+}
+
+/** 開いている入力ダイアログ（マスタ編集・処分）の内容を控える（ログイン期限切れのあと続きから使えるように） */
+function captureDialog() {
+  if ($('masterDialog').open) {
+    return { type: 'master', table: S.masterTable, id: $('masterForm').dataset.id, dirty: $('masterForm').dataset.dirty,
+      values: [...$('masterFields').querySelectorAll('input, select')].map((el) => [el.id, el.type === 'checkbox' ? el.checked : el.value]) };
+  }
+  if ($('disposeDialog').open) {
+    const f = $('disposeForm');
+    return { type: 'dispose', data: { ...f.dataset }, info: $('disposeInfo').textContent, max: $('dpQty').max, all: $('dpAll').textContent, allQty: $('dpAll').dataset.qty,
+      values: ['dpKind', 'dpQty', 'dpReason'].map((id) => [id, $(id).value]) };
+  }
+  return null;
+}
+function restoreDialog(d) {
+  if (!d) return;
+  if (d.type === 'master') {
+    S.masterTable = d.table;
+    editMaster(d.id || null);
+    d.values.forEach(([id, v]) => { const el = $(id); if (!el) return; if (el.type === 'checkbox') el.checked = v; else el.value = v; });
+    syncMedicalCode();
+    $('masterForm').dataset.dirty = d.dirty;
+  } else {
+    const f = $('disposeForm');
+    Object.assign(f.dataset, d.data);
+    $('disposeInfo').textContent = d.info; $('dpQty').max = d.max; $('dpQtyHint').textContent = `最大 ${fmt(d.max)}`;
+    $('dpAll').textContent = d.all; $('dpAll').dataset.qty = d.allQty;
+    d.values.forEach(([id, v]) => { $(id).value = v; });
+    alertBox('dpMsg', '');
+    $('disposeDialog').showModal();
+  }
+}
 
 /** 前の利用者の入力内容・表示結果を消す（共用端末で別の人がログインする場合に備える） */
 function clearScreens() {
@@ -422,7 +466,7 @@ async function login(e) {
       }
       const old = S.sess;
       if (old) sbFetch('/auth/v1/logout?scope=local', undefined, old.access_token).catch(() => {}); // 前のセッションは無効化
-      if (S.user && S.user.toLowerCase() !== email.toLowerCase()) clearScreens();
+      if (S.user && S.user.toLowerCase() !== email.toLowerCase()) { clearScreens(); S.pendingDialog = null; }
       S.user = email;
       setSession(data, false);
       $('loginPassword').value = '';
@@ -451,14 +495,24 @@ async function boot() {
   try {
     await reloadMasters();
     ['rcDate', 'shDate'].forEach((id) => { if (!$(id).value) $(id).value = S.cfg.today; });
+    setDateLimits();
     if (!$('shLines').children.length) addLine();
     route();
     // 初めてログインした人には、ステップ形式のガイドを自動で表示する
     if (!(S.cfg.prefs && S.cfg.prefs.guideDone)) openGuide(0); else focusTo($('main'));
+    if (S.pendingDialog) { const d = S.pendingDialog; S.pendingDialog = null; setTimeout(() => restoreDialog(d), 300); } // 期限切れ前に開いていた入力ダイアログを戻す
     G_STATE.opener = null;
   } catch (err) {
     if (S.sess) toast(err.message, 'ng');
   }
+}
+
+/** 日付欄の入力できる範囲（サーバーの規則と同じ）：出荷日は当日〜過去90日、入荷日・返品日は当日まで */
+function setDateLimits() {
+  const t = S.cfg.today;
+  const d = new Date(t + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 90);
+  $('shDate').max = t; $('shDate').min = d.toISOString().slice(0, 10);
+  $('rcDate').max = t; $('rtDate').max = t;
 }
 
 /** 日付が変わっていたら、入力欄の既定の日付（当日）を新しい日付にする（端末を開いたまま翌日に使う場合） */
@@ -471,6 +525,7 @@ async function refreshToday() {
     const old = S.cfg.today;
     if (cfg.today === old) return;
     S.cfg.today = cfg.today;
+    setDateLimits();
     ['rcDate', 'shDate', 'rtDate'].forEach((id) => { if ($(id).value === old) $(id).value = cfg.today; });
     toast('日付が変わったため、入力欄の日付を ' + cfg.today + ' にしました');
     if (S.page === 'dashboard') loadDashboard().catch(() => {});
@@ -998,6 +1053,7 @@ async function submitShipment(e) {
     if (!l.querySelector('.slPrice').value.trim()) extra.push(l.querySelector('.slPrice'));
   });
   if (!lines.some((l) => l.productId) && lineEls[0]) extra.unshift(lineEls[0].querySelector('.slProd'));
+  $('shMsg').dataset.client = '1';
   if (!checkRequired($('shipForm'), 'shMsg', extra)) return;
   // 数量は1以上の整数
   const badQty = lineEls.find((l) => l.querySelector('.slProd').value && !(Number.isInteger(Number(l.querySelector('.slQty').value)) && Number(l.querySelector('.slQty').value) >= 1));
@@ -1053,6 +1109,12 @@ async function submitShipment(e) {
       $('shNote').value = '';
       await loadShipmentPage();
     } catch (err) {
+      $('shMsg').dataset.client = '';
+      // エラーの原因になった欄に印を付ける
+      if (/出荷日/.test(err.message)) $('shDate').setAttribute('aria-invalid', 'true');
+      const m = err.message.match(/商品「(.+?)」/);
+      if (m) lineEls.filter((l) => { const p = S.M.products.find((x) => String(x.id) === l.querySelector('.slProd').value); return p && p.name === m[1]; })
+        .forEach((l) => l.querySelector(/販売できません/.test(err.message) ? '.slProd' : '.slQty').setAttribute('aria-invalid', 'true'));
       alertBox('shMsg', err.message, 'ng');
       loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach(updateLineAvail)).catch(() => {}); // 引当可能数を最新に
     }
@@ -1098,7 +1160,8 @@ function updateLineAvail(line) {
   // 直したら赤い印とエラー表示を消す
   if (!blocked) line.querySelector('.slProd').removeAttribute('aria-invalid');
   if (!(n !== null && qty > n) && qty > 0) line.querySelector('.slQty').removeAttribute('aria-invalid');
-  if ($('shMsg').querySelector('.alert-ng') && ![...document.querySelectorAll('#shLines [aria-invalid="true"]')].length) alertBox('shMsg', '');
+  // 画面側のチェックで出したエラーだけを消す（サーバーからのエラーは次に確定するまで残す）
+  if ($('shMsg').dataset.client === '1' && $('shMsg').querySelector('.alert-ng') && ![...document.querySelectorAll('#shLines [aria-invalid="true"]')].length) alertBox('shMsg', '');
 }
 
 async function loadRecentShipments() {
@@ -1172,17 +1235,29 @@ async function loadTraceRecent() {
 }
 
 /** 返品画面：最近の出荷から選べるようにする */
+/** 返品フォームの入力内容を控える／戻す（出荷を最新に描き直しても入力を失わないように） */
+function captureReturnForm() {
+  if ($('rtForm').hidden || !S.returnLine) return null;
+  return { line: S.returnLine, values: Object.fromEntries(['rtQty', 'rtDate', 'rtReason', 'rtQLoc', 'rtDisp', 'rtRLoc'].map((id) => [id, $(id).value])) };
+}
+function restoreReturnForm(saved) {
+  if (!saved) return;
+  const b = $('rtShipment').querySelector(`[data-action="selectReturnLine"][data-id="${saved.line}"]`);
+  if (!b) return;
+  selectReturnLine(b, true);
+  Object.entries(saved.values).forEach(([id, v]) => { if ($(id).disabled) return; if ($(id).tagName !== 'SELECT' || [...$(id).options].some((o) => o.value === v)) $(id).value = v; });
+  $('rtRLocWrap').hidden = $('rtDisp').value !== 'RESTOCK';
+}
+
 async function loadReturnRecent() {
   const fromUrl = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
   if (fromUrl && !$('rtShipment').innerHTML) { $('rtShipNo').value = decodeURIComponent(fromUrl); await findShipmentForReturn(null, false); return; }
   // 表示中の出荷があれば最新の状態で出し直す（回収などでロットの状態が変わっている場合があるため）
   if ($('rtShipment').innerHTML && $('rtShipNo').value.trim()) {
-    const line = !$('rtForm').hidden && S.returnLine, qty = $('rtQty').value;
+    const saved = captureReturnForm();
     alertBox('rtFindMsg', '');
     await findShipmentForReturn(null, false);
-    // 入力途中だった明細は、まだ返品できるなら選び直して数量も戻す
-    const b = line && $('rtShipment').querySelector(`[data-action="selectReturnLine"][data-id="${line}"]`);
-    if (b) { selectReturnLine(b); if (qty && Number(qty) <= Number(b.dataset.max)) $('rtQty').value = qty; }
+    restoreReturnForm(saved); // 入力途中だった明細は、まだ返品できるなら選び直して入力内容も戻す
     return;
   }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
@@ -1202,7 +1277,7 @@ function cancelReturn() {
   focusTo(sel || $('rtShipment'));
 }
 
-function selectReturnLine(btn) {
+function selectReturnLine(btn, quiet) {
   S.returnLine = btn.dataset.id;
   document.querySelectorAll('#rtShipment tr.is-selected').forEach((tr) => tr.classList.remove('is-selected'));
   document.querySelectorAll('#rtShipment [data-action="selectReturnLine"]').forEach((b) => { b.textContent = 'この明細を返品'; b.disabled = false; });
@@ -1230,12 +1305,19 @@ function selectReturnLine(btn) {
   $('rtRLocWrap').hidden = true;
   if (recall) $('rtLineInfo').innerHTML += '・' + nw('回収中のため回収品として登録（処置は廃棄）');
   $('rtForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  setTimeout(() => $('rtQty').focus({ preventScroll: true }), 300);
+  if (!quiet) setTimeout(() => $('rtQty').focus({ preventScroll: true }), 300);
 }
 
 async function submitReturn(e) {
   e.preventDefault();
   if (!checkRequired($('rtForm'), 'rtMsg')) return;
+  const q = Number($('rtQty').value);
+  if (!Number.isInteger(q) || q < 1 || q > Number($('rtQty').max)) {
+    $('rtQty').setAttribute('aria-invalid', 'true');
+    alertBox('rtMsg', `返品数量は 1〜${fmt($('rtQty').max)} の整数で入力してください。`, 'ng', true);
+    $('rtQty').focus();
+    return;
+  }
   await busy(e.submitter, async () => {
     alertBox('rtMsg', '');
     try {
@@ -1252,9 +1334,16 @@ async function submitReturn(e) {
       focusTo($('rtFindMsg').firstElementChild);
     } catch (err) {
       alertBox('rtMsg', err.message, 'ng');
-      if (/取消|返品可能数/.test(err.message)) { // 他の利用者の操作で出荷の状態が変わっている
+      const avail = (err.message.match(/返品可能数（(\d+)）/) || [])[1];
+      if (/取消/.test(err.message) || (avail !== undefined && Number(avail) !== Number($('rtQty').max))) { // 他の利用者の操作で出荷の状態が変わっている
+        const saved = captureReturnForm();
         await findShipmentForReturn(null, true);
+        restoreReturnForm(saved);
         alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng');
+      } else if (/返品数量|返品可能数/.test(err.message)) {
+        $('rtQty').setAttribute('aria-invalid', 'true'); $('rtQty').focus();
+      } else if (/返品日/.test(err.message)) {
+        $('rtDate').setAttribute('aria-invalid', 'true'); $('rtDate').focus();
       }
     }
   });
@@ -1345,6 +1434,13 @@ async function submitDispose(e) {
       alertBox('invMsg', `ロット ${r.lotNo} の ${fmt(r.quantity)} を${r.kind === 'DISPOSE' ? '廃棄' : '仕入先返品'}として記録しました。`, 'ok', false,
         f.dataset.status === 'RECALLED' ? goBtn('recall', '回収管理へ戻る') : '');
     } catch (err) {
+      const left = (err.message.match(/在庫（(\d+)）/) || [])[1];
+      if (left !== undefined) { // 他の利用者が先に処分した等で在庫が変わっている
+        $('dpQty').max = left; $('dpQtyHint').textContent = `最大 ${fmt(left)}（最新）`;
+        $('dpAll').textContent = `全数（${fmt(left)}）`; $('dpAll').dataset.qty = left;
+        $('dpQty').setAttribute('aria-invalid', 'true');
+        loadInventory().catch(() => {});
+      }
       alertBox('dpMsg', err.message, 'ng');
     }
   });
@@ -1449,13 +1545,15 @@ async function searchCustomer(e) {
 // ======================================================================
 const RECALL_STATUS = { OPEN: '登録', IN_PROGRESS: '対応中', CLOSED: '完了' };
 
-async function loadRecalls() {
+async function loadRecalls(exceptId) {
+  const snap = snapshotTargetForms(exceptId); // 入力中の「進捗を更新」は描き直しても残す
   const [lots, recalls] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
   const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
   $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
       <small>${joinNw([l.product, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
   $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
+  restoreTargetForms(snap);
 }
 
 function recallTotals(r) {
@@ -1482,7 +1580,7 @@ function renderRecall(r) {
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}"></div>
         ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}"><option value="">変更しない</option><option value="CONTACTED">連絡済にする</option><option value="CLOSED">クローズする</option></select></div>` : ''}
         <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" autocomplete="off" maxlength="500" aria-describedby="cre_${t.id}"><div class="field-err" id="cre_${t.id}" role="alert"></div></div>
-        <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}">保存</button>
+        <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}" data-ver="${esc(t.updated_at)}">保存</button>
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
     const contacts = [t.contact_name ? esc(t.contact_name) : '', telLink(t.phone), mailLink(t.email)].filter(Boolean);
     return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
@@ -1559,16 +1657,17 @@ async function saveTarget(btn) {
   await busy(btn, async () => {
     try {
       await api('updateRecallTarget', { targetId: id, contactedOn: $('cd_' + id).value, contactMethod: $('cm_' + id).value,
-        unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value });
+        unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value, expectedUpdatedAt: btn.dataset.ver });
       $('toasts').innerHTML = '';
       toast('保存しました');
-      const snap = snapshotTargetForms(id);
-      await loadRecalls();
-      restoreTargetForms(snap);
+      await loadRecalls(id);
       focusTo($('tg_' + id));
     } catch (err) {
+      if (/他の利用者/.test(err.message)) await loadRecalls(); // 最新の状態に描き直す（入力中の内容は残す）
       $('cre_' + id).textContent = userText(err.message);
-      focusTo($('cre_' + id));
+      // 原因の欄に印を付けて移動する
+      const field = /連絡日/.test(err.message) ? 'cd_' : /回収不能/.test(err.message) ? 'un_' : /クローズ理由/.test(err.message) ? 'cr_' : '';
+      if (field && $(field + id)) { $(field + id).setAttribute('aria-invalid', 'true'); $(field + id).focus(); } else focusTo($('cre_' + id));
     }
   });
 }
@@ -1763,7 +1862,10 @@ async function saveRule(chk, isUndo) {
 const ACTIONS = {
   go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
   openSheet, closeSheet,
-  logout: () => logout(''),
+  logout: async () => {
+    if (hasUnsavedInput() && !(await ask({ title: 'ログアウトしますか？', body: '保存していない入力内容があります。ログアウトすると消えます。', okText: 'ログアウトする', danger: true }))) return;
+    logout('');
+  },
   retry,
   guideOpen: () => openGuide(),
   guideStep: (el) => openGuide(Number(el.dataset.step)),
@@ -1935,10 +2037,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 返品の入力途中でページを閉じる・再読み込みするときは確認する
   window.addEventListener('beforeunload', (e) => {
     if (!S.sess || $('app').hidden) return;
-    const receipt = ['rcSupLot', 'rcQty', 'rcPrice'].some((id) => $(id).value.trim());
-    const ship = $('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim());
-    const ret = !$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim());
-    if (receipt || ship || ret) { e.preventDefault(); e.returnValue = ''; }
+    if (hasUnsavedInput()) { e.preventDefault(); e.returnValue = ''; }
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshToday(); });
   window.addEventListener('focus', refreshToday);

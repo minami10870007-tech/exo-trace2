@@ -182,6 +182,7 @@ try {
   ok(rv.targets.find((t) => t.customer === 'サロンB').recovered_qty === 2 && rv.targets.find((t) => t.customer === 'サロンB').status === 'CONTACTED' && rv.targets.find((t) => t.customer === 'サロンB').contacted_on === '2026-10-04', '回収数を返品から集計（回収品が届いたら連絡済）');
   await throwsMsg(G.update_recall_target({ targetId: tB.id, unrecoverableQty: 2 }), /超えています/, '回収不能数の上限');
   await throwsMsg(G.update_recall_target({ targetId: tB.id, contactedOn: '2026-09-01' }), /回収開始日以降/, '連絡日は回収開始日以降');
+  await throwsMsg(G.update_recall_target({ targetId: tB.id, contactMethod: '電話', expectedUpdatedAt: '2000-01-01 00:00:00+00' }), /他の利用者または返品登録で更新/, '古い画面からの回収状況の保存は拒否');
   ok((await G.get_shipment_by_no({ no: s2.shipment_no })).lines.every((l) => l.in_open_recall === true && l.storage_class === 'M80'), '返品画面用：回収中フラグ・温度区分');
   await G.update_recall_target({ targetId: tB.id, contactedOn: '2026-10-04', contactMethod: '電話', status: 'CONTACTED', unrecoverableQty: 1, closeReason: '' });
   rv = (await G.list_recalls())[0];
