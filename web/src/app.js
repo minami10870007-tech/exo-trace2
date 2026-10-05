@@ -736,7 +736,8 @@ async function reloadMasters(opts = {}) {
   else if (keep.rcLoc && $('rcProduct').value === keep.rcProduct) { // 選んでいた保管場所が無効にされた：別の場所に黙って入れ替えない
     $('rcLoc').value = ''; $('rcLoc').setAttribute('aria-invalid', 'true');
     const l = old && (old.locations || []).find((x) => String(x.id) === keep.rcLoc);
-    gone.rcMsg.push({ name: l ? l.name : '保管場所', self: false });
+    gone.rcMsg.push({ name: l ? l.location_code + ' ' + l.name : '保管場所', loc: true,
+      self: !!opts.self && opts.self.key === 'locations' && String(opts.self.id) === keep.rcLoc });
   }
   updateCustHint();
   renderPrereq();
@@ -755,9 +756,12 @@ async function reloadMasters(opts = {}) {
   const say = (msg, list) => {
     if (!list.length) return;
     // 自分がマスタで保存した項目だけ「マスタで無効にした」、それ以外は他の利用者による変更
-    const mine = list.filter((x) => x.self), others = list.filter((x) => !x.self);
+    const items = list.filter((x) => !x.loc), locs = list.filter((x) => x.loc);
+    const mine = items.filter((x) => x.self), others = items.filter((x) => !x.self);
     const part = (xs, who) => xs.length ? `${xs.map((x) => `「${x.name}」`).join('、')}は、${who}ため選択を外しました。` : '';
-    alertBox(msg, part(mine, 'マスタで無効にした') + part(others, '他の利用者が無効にした') + '選び直してください。', 'warn', true);
+    // 保管場所は無効化のほか、温度区分・隔離の変更でも選べなくなる
+    const locPart = locs.length ? `保管場所${locs.map((x) => `「${x.name}」`).join('、')}は、${locs.some((x) => x.self) ? 'マスタの変更' : '他の利用者の変更（無効化・区分の変更）'}でこの商品に使えなくなったため選択を外しました。` : '';
+    alertBox(msg, part(mine, 'マスタで無効にした') + part(others, '他の利用者が無効にした') + locPart + '選び直してください。', 'warn', true);
     $(msg).dataset.gone = '1';
   };
   say('rcMsg', gone.rcMsg); say('shMsg', gone.shMsg);
