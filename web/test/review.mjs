@@ -295,6 +295,7 @@ for (const vp of VIEWPORTS) {
     await card.locator('[data-action="changeStatus"]').click(); await page.waitForSelector('#dialog[open]');
     if (!/元に戻せません/.test(await page.textContent('#dialogBody'))) throw new Error('確認の文言がない');
     await page.click('#dialogForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    await card.locator('select.insTo').selectOption(''); await card.locator('input.insReason').fill(''); // 後のテストのため入力を戻す
   });
   await step('返品：出荷番号が空なら案内・最近の出荷から選べる', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
@@ -371,6 +372,7 @@ for (const vp of VIEWPORTS) {
     await cards.nth(0).locator('select.insTo').selectOption('HOLD'); await cards.nth(0).locator('input.insReason').fill('テスト保留');
     await cards.nth(0).locator('[data-action="changeStatus"]').click(); await page.click('#dialogOk'); await waitText('#insMsg', /保留/);
     if ((await page.inputValue('#rs_' + keepId)) !== '外観確認中' || (await page.inputValue('#to_' + keepId)) !== 'HOLD') throw new Error('他のカードの入力が消えた');
+    await page.selectOption('#to_' + keepId, ''); await page.fill('#rs_' + keepId, ''); // 後のテストのため入力を戻す
   });
   await step('「戻る」で画面が変わったら確認ダイアログは閉じて実行されない', async () => {
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
@@ -449,6 +451,15 @@ for (const vp of VIEWPORTS) {
     if ((await page.inputValue('#mf_list_price')) !== '99999') throw new Error('他の人の変更（標準売価）が取り込まれない');
     await page.click('#masterForm button[value="save"]'); await page.waitForFunction(() => !document.getElementById('masterDialog').open);
     if (psql(server.sb.db, `select list_price::int || '|' || (name like '%（改）') from exo.m_product where id = ${pid}`) !== '99999|true') throw new Error('他の人の変更が消えた');
+  });
+  await step('マスタ編集中に「戻る」を押すと破棄の確認が出て、キャンセルなら入力が残る', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="master"]'); await idle(page);
+    await page.click('#msList tr[data-action]'); await page.fill('#mf_reorder_point', '55');
+    await page.goBack(); await page.waitForSelector('#dialog[open]');
+    await page.click('#dialogForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    if (!(await page.$('#masterDialog[open]')) || (await page.inputValue('#mf_reorder_point')) !== '55') throw new Error('入力が消えた');
+    if (!(await page.isVisible('#page-master'))) throw new Error('画面が移動した');
+    await page.click('#masterForm [data-action="dialogCancel"]'); await page.click('#dialogOk'); await page.waitForFunction(() => !document.getElementById('masterDialog').open);
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
@@ -607,7 +618,7 @@ for (const vp of VIEWPORTS) {
     await page.click('.setup-card .next [data-action="guideStep"]'); await waitText('#guideCount', /準備 2 \/ 7/);
     await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
     await page.click('[data-action="hideSetup"]'); await waitText('#toasts', /非表示/);
-    if (await page.$('.setup-card')) throw new Error('非表示にならない');
+    await page.waitForFunction(() => !document.querySelector('.setup-card'), null, { timeout: 10000 }).catch(() => { throw new Error('非表示にならない'); });
   });
   if (errs.length) { report.errors.push({ viewport: 'guide-flow', errs }); total += errs.length; }
   await ctx.close();

@@ -405,6 +405,7 @@ function unsavedScreens() {
   if ($('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim())) list.push('出荷登録');
   if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim())) list.push('返品登録');
   if ($('rcTitle').value.trim() || $('rcReason').value.trim() || snapshotTargetForms().some((t) => t.fields.length)) list.push('回収管理');
+  if (snapshotInspect().length) list.push('受入検品');
   if ($('masterDialog').open && $('masterForm').dataset.dirty === '1') list.push('マスタ編集');
   if ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1') list.push('在庫の処分');
   return list;
@@ -569,6 +570,7 @@ function renderNav() {
 }
 
 function route() {
+  S.lastHash = location.hash;
   const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
   const page = PAGES.find((p) => p.id === id) || PAGES[0];
   showPage(page.id);
@@ -922,7 +924,7 @@ function autoExpiry() {
 async function submitReceipt(e) {
   e.preventDefault();
   if (!checkRequired($('receiptForm'), 'rcMsg')) return;
-  const bad = (id, msg) => { $(id).setAttribute('aria-invalid', 'true'); alertBox('rcMsg', msg, 'ng', true); $(id).focus(); return true; };
+  const bad = (id, msg) => { $(id).setAttribute('aria-invalid', 'true'); alertBox('rcMsg', msg, 'ng'); $(id).focus({ preventScroll: true }); return true; };
   const q = Number($('rcQty').value), d = $('rcDate').value, exp = $('rcExp').value, mfg = $('rcMfg').value;
   if (!(Number.isInteger(q) && q >= 1) && bad('rcQty', '入荷数量は1以上の整数で入力してください。')) return;
   if ($('rcDate').max && d > $('rcDate').max && bad('rcDate', '入荷日は当日以前の日付を入力してください。')) return;
@@ -1276,6 +1278,15 @@ function captureReturnForm() {
   if ($('rtForm').hidden || !S.returnLine) return null;
   return { line: S.returnLine, values: Object.fromEntries(['rtQty', 'rtDate', 'rtReason', 'rtQLoc', 'rtDisp', 'rtRLoc'].map((id) => [id, $(id).value])) };
 }
+/** 返品の入力途中の内容をタブ内に保存する（再読み込みしても戻せるように） */
+function saveReturnDraft() {
+  try {
+    const d = captureReturnForm();
+    if (d) sessionStorage.setItem('exo-return-draft', JSON.stringify({ no: $('rtShipNo').value.trim().toUpperCase(), d }));
+    else sessionStorage.removeItem('exo-return-draft');
+  } catch (e) { /* 保存できない環境では何もしない */ }
+}
+
 function restoreReturnForm(saved) {
   if (!saved) return;
   const b = $('rtShipment').querySelector(`[data-action="selectReturnLine"][data-id="${saved.line}"]`);
@@ -1287,7 +1298,15 @@ function restoreReturnForm(saved) {
 
 async function loadReturnRecent() {
   const fromUrl = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
-  if (fromUrl && !$('rtShipment').innerHTML) { $('rtShipNo').value = decodeURIComponent(fromUrl); await findShipmentForReturn(null, false); return; }
+  if (fromUrl && !$('rtShipment').innerHTML) {
+    $('rtShipNo').value = decodeURIComponent(fromUrl);
+    await findShipmentForReturn(null, false);
+    try { // 再読み込み前の入力途中の内容があれば戻す
+      const draft = JSON.parse(sessionStorage.getItem('exo-return-draft') || 'null');
+      if (draft && draft.no === $('rtShipNo').value.trim().toUpperCase()) restoreReturnForm(draft.d);
+    } catch (e) { /* 何もしない */ }
+    return;
+  }
   // 表示中の出荷があれば最新の状態で出し直す（回収などでロットの状態が変わっている場合があるため）
   if ($('rtShipment').innerHTML && $('rtShipNo').value.trim()) {
     const saved = captureReturnForm();
@@ -1365,6 +1384,7 @@ async function submitReturn(e) {
         (lot ? `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(lot)}">このロットを追跡</button>` : '') +
         (r.recall ? goBtn('recall', '回収案件を開く') : ''));
       $('rtReason').value = '';
+      try { sessionStorage.removeItem('exo-return-draft'); } catch (e2) { /* 何もしない */ }
       await findShipmentForReturn(null, true);
       $('rtFindMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       focusTo($('rtFindMsg').firstElementChild);
@@ -1474,8 +1494,17 @@ async function submitDispose(e) {
       if (left !== undefined) { // 他の利用者が先に処分した等で在庫が変わっている
         $('dpQty').max = left; $('dpQtyHint').textContent = `最大 ${fmt(left)}（最新）`;
         $('dpAll').textContent = `全数（${fmt(left)}）`; $('dpAll').dataset.qty = left;
-        $('dpQty').setAttribute('aria-invalid', 'true');
+        $('disposeInfo').textContent = $('disposeInfo').textContent.replace(/の在庫 [\d,]+ から/, `の在庫 ${fmt(left)}（最新）から`);
         loadInventory().catch(() => {});
+        if (Number(left) === 0) {
+          f.dataset.dirty = '';
+          alertBox('dpMsg', '他の利用者がこのロットを先に処分しました（在庫 0）。これ以上処分する在庫はありません。', 'warn', false,
+            '<button type="button" class="btn btn-secondary btn-sm" data-action="dialogCancel">閉じる</button>');
+          return;
+        }
+        $('dpQty').setAttribute('aria-invalid', 'true');
+        alertBox('dpMsg', `他の利用者が先に処分したため、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng');
+        return;
       }
       alertBox('dpMsg', err.message, 'ng');
     }
@@ -1535,7 +1564,8 @@ async function searchLot(e) {
 // ======================================================================
 // 顧客追跡
 // ======================================================================
-const nowText = () => new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+/** 現在時刻（日本時間・ステータス履歴と同じ YYYY-MM-DD HH:MM 形式） */
+const nowText = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date());
 
 /** 顧客追跡：表示中の結果があれば、開き直したときに最新の状態で出し直す */
 async function loadCustomerTrace() {
@@ -1899,20 +1929,21 @@ async function saveMasterForm(e) {
         $('masterForm').dataset.ver = cur ? cur.updated_at : '';
         const orig = S.masterOrig || {};
         const norm = (v) => String(v === null || v === undefined ? '' : v);
-        const both = [];
+        const both = [], updated = [];
         if (cur) MASTER[t].fields.forEach(([k, label, type]) => {
           const el = $('mf_' + k); if (!el) return;
           const changedByMe = norm(data[k]) !== norm(orig[k]);
           const changedByOther = norm(cur[k]) !== norm(orig[k]);
           if (!changedByOther) return;
-          if (!changedByMe) { if (type === 'bool') el.checked = String(cur[k]) === 'true'; else el.value = norm(cur[k]); }
+          const show = (v) => (type && type.startsWith('code:') ? code(type.slice(5), v) : type === 'bool' ? (String(v) === 'true' ? 'はい' : 'いいえ') : norm(v) || '空欄');
+          if (!changedByMe) { if (type === 'bool') el.checked = String(cur[k]) === 'true'; else el.value = norm(cur[k]); updated.push(`${label}（${show(orig[k])}→${show(cur[k])}）`); }
           else if (norm(cur[k]) !== norm(data[k])) {
             both.push(`${label}（他の利用者：${type && type.startsWith('code:') ? code(type.slice(5), cur[k]) : norm(cur[k]) || '空欄'} ／ あなた：${type && type.startsWith('code:') ? code(type.slice(5), data[k]) : norm(data[k]) || '空欄'}）`);
             el.setAttribute('aria-invalid', 'true');
           }
         });
         S.masterOrig = Object.assign({}, cur);
-        alertBox('masterMsg', 'このデータは他の利用者が先に更新しています。あなたが変更していない項目は最新の内容にしました。' +
+        alertBox('masterMsg', 'このデータは他の利用者が先に更新しています。' + (updated.length ? `最新の内容に更新した項目：${updated.join('、')}` : '') +
           (both.length ? `\n両方が変更した項目：${both.join('、')}\n内容を確認して「保存」すると、あなたの値で保存します。` : '\n内容を確認して、もう一度「保存」してください。'), 'ng');
         syncMedicalCode();
         return;
@@ -2076,6 +2107,7 @@ document.addEventListener('input', (e) => {
   if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && String(e.target.value || '').trim()) e.target.removeAttribute('aria-invalid');
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();
+  if (e.target.closest && e.target.closest('#rtForm')) saveReturnDraft();
   if (e.target.classList.contains('slQty')) updateLineAvail(e.target.closest('.line'), true);
   if (e.target.classList.contains('insReason')) updateInspectAction(e.target.dataset.id);
 });
@@ -2122,7 +2154,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const b = e.target.closest('button[data-table]');
     if (b) { S.masterTable = b.dataset.table; loadMaster().catch((err) => toast(err.message, 'ng')); }
   });
-  window.addEventListener('hashchange', () => { if (S.sess && !$('app').hidden) route(); });
+  window.addEventListener('hashchange', async () => {
+    if (!S.sess || $('app').hidden) return;
+    // 入力途中のダイアログ（マスタ編集・処分）があるときに「戻る」が押されたら、元の画面に戻して確認する
+    const dirty = ($('masterDialog').open && $('masterForm').dataset.dirty === '1') || ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1');
+    if (dirty) {
+      const target = location.hash;
+      history.pushState(null, '', S.lastHash || '#/dashboard');
+      if (!(await ask({ title: '入力内容を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して移動する', danger: true }))) return;
+      ['masterDialog', 'disposeDialog'].forEach((d) => { if ($(d).open) $(d).close('cancel'); });
+      location.hash = target;
+      return;
+    }
+    route();
+  });
   // 返品の入力途中でページを閉じる・再読み込みするときは確認する
   window.addEventListener('beforeunload', (e) => {
     if (!S.sess || $('app').hidden) return;
