@@ -361,6 +361,27 @@ for (const vp of VIEWPORTS) {
     const v = await page.locator('#rclList .target-edit').nth(1).locator('input[id^="cr_"]').inputValue();
     if (v !== '入力途中のメモ') throw new Error('他の顧客の入力が消えた: ' + v);
   });
+  await step('検品：別のロットを判定しても、他のカードの入力は消えない', async () => {
+    await page.click('#bottomNav [data-page="inspect"]'); await idle(page);
+    await page.waitForSelector('#insBody:not(.is-loading) .lot-card select.insTo');
+    const cards = page.locator('#insBody .lot-card', { has: page.locator('select.insTo') });
+    if ((await cards.count()) < 2) return;
+    await cards.nth(1).locator('select.insTo').selectOption('HOLD'); await cards.nth(1).locator('input.insReason').fill('外観確認中');
+    const keepId = await cards.nth(1).locator('select.insTo').getAttribute('data-id');
+    await cards.nth(0).locator('select.insTo').selectOption('HOLD'); await cards.nth(0).locator('input.insReason').fill('テスト保留');
+    await cards.nth(0).locator('[data-action="changeStatus"]').click(); await page.click('#dialogOk'); await waitText('#insMsg', /保留/);
+    if ((await page.inputValue('#rs_' + keepId)) !== '外観確認中' || (await page.inputValue('#to_' + keepId)) !== 'HOLD') throw new Error('他のカードの入力が消えた');
+  });
+  await step('「戻る」で画面が変わったら確認ダイアログは閉じて実行されない', async () => {
+    await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
+    const n = Number(psql(server.sb.db, 'select count(*) from exo.t_shipment'));
+    await page.selectOption('#shCustomer', { index: 1 }); await page.selectOption('.slProd', { index: 1 }); await page.fill('.slQty', '1');
+    if (!(await page.inputValue('.slPrice'))) await page.fill('.slPrice', '1000');
+    await page.click('#shipForm button[type="submit"]'); await page.waitForSelector('#dialog[open]');
+    await page.goBack(); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    await page.waitForTimeout(500);
+    if (Number(psql(server.sb.db, 'select count(*) from exo.t_shipment')) !== n) throw new Error('出荷が登録された');
+  });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
     if (n !== '1') throw new Error('created_by がログインユーザーでない');

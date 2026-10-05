@@ -578,7 +578,8 @@ language sql stable set search_path = '' as $$
         'customer', t.customer, 'customer_code', t.customer_code, 'contact_name', t.contact_name, 'phone', t.phone,
         'email', t.email, 'lot_no', t.lot_no, 'statusLabel', exo.code_label('target_status', t.status)) order by t.id) from t), '[]'::jsonb),
     'contactedRate', case when (select count(*) from act) = 0 then 100
-      else round(100.0 * (select count(*) from act where status <> 'NOT_CONTACTED') / (select count(*) from act)) end,
+      -- 実際に連絡が取れた顧客の割合（連絡せずにクローズした顧客は含めない）
+      else round(100.0 * (select count(*) from act where status in ('CONTACTED', 'RECOVERED') or contacted_on is not null) / (select count(*) from act)) end,
     'recoveredRate', case when coalesce((select sum(shipped_qty) from act), 0) = 0 then 100
       else round(100.0 * (select sum(least(shipped_qty, recovered_qty)) from act) / (select sum(shipped_qty) from act)) end,  -- 実際に回収できた割合（回収不能は含めない）
     'remainingStock', coalesce((select sum(i.on_hand_qty) from exo.t_recall_lot rl join exo.t_inventory i on i.lot_id = rl.lot_id
