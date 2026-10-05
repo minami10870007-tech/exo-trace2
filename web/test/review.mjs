@@ -431,6 +431,23 @@ for (const vp of VIEWPORTS) {
     await page.goBack(); await idle(page); await waitHash(/^#\/return$/);
     await page.waitForTimeout(800); if (/no=/.test(await hash())) throw new Error('出荷が再び開いた');
     await page.waitForSelector('#rtRecent [data-action="pickReturnShipment"]', { timeout: 5000 }).catch(() => { throw new Error('最近の出荷が出ない'); });
+    // 入力途中の返品：番号の打ち間違いでは消えない／「別の出荷を選ぶ」は確認し、「戻る」で内容が戻る
+    await page.click('#rtRecent [data-action="pickReturnShipment"]'); await idle(page); await waitHash(/no=/);
+    await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
+    await page.fill('#rtQty', '1'); await page.fill('#rtReason', '箱つぶれ');
+    const no = await page.inputValue('#rtShipNo');
+    await page.fill('#rtShipNo', no.replace(/\d$/, 'X')); await page.click('#rtSearch button[type="submit"]'); await idle(page);
+    await waitText('#rtFindMsg', /そのまま/);
+    if (await page.isHidden('#rtForm')) throw new Error('打ち間違いで入力フォームが消えた');
+    if ((await page.inputValue('#rtReason')) !== '箱つぶれ') throw new Error('理由が消えた');
+    await page.click('#rtShipment [data-action="newReturn"]'); await page.waitForSelector('#dialog[open]');
+    await page.click('#dialogForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    if (await page.isHidden('#rtForm')) throw new Error('確認でキャンセルしたのに閉じた');
+    await page.click('#rtShipment [data-action="newReturn"]'); await page.click('#dialogOk'); await idle(page); await waitHash(/^#\/return$/);
+    await page.goBack(); await idle(page); await waitHash(/no=/);
+    await page.waitForFunction(() => !document.getElementById('rtForm').hidden && document.getElementById('rtReason').value === '箱つぶれ', null, { timeout: 10000 })
+      .catch(() => { throw new Error('「戻る」で入力途中の内容が戻らない'); });
+    await page.click('[data-action="cancelReturn"]');
   });
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
