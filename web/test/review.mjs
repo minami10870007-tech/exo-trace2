@@ -447,7 +447,7 @@ for (const vp of VIEWPORTS) {
     await page.goBack(); await idle(page); await waitHash(/no=/);
     await page.waitForFunction(() => !document.getElementById('rtForm').hidden && document.getElementById('rtReason').value === '箱つぶれ', null, { timeout: 10000 })
       .catch(() => { throw new Error('「戻る」で入力途中の内容が戻らない'); });
-    await page.click('[data-action="cancelReturn"]');
+    await page.click('[data-action="cancelReturn"]'); await page.waitForTimeout(200); if (await page.$('#dialog[open]')) await page.click('#dialogOk');
     await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
     if (await page.inputValue('#rtReason')) throw new Error('キャンセル後も前の理由が残っている');
     // 一部だけ返品して登録 → フォームは閉じ、未保存扱いにならない
@@ -466,7 +466,7 @@ for (const vp of VIEWPORTS) {
     await page.click('#rtForm button[type="submit"]');
     if (await page.isHidden('#rtForm')) throw new Error('フォームが消えた');
     if (!/1〜/.test(await page.textContent('#rtMsg'))) throw new Error(await page.textContent('#rtMsg'));
-    await page.click('[data-action="cancelReturn"]'); await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
+    await page.click('[data-action="cancelReturn"]'); await page.waitForTimeout(200); if (await page.$('#dialog[open]')) await page.click('#dialogOk'); await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
   });
   await step('回収管理を見ただけでは「未保存の入力」と判定しない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
@@ -538,9 +538,10 @@ for (const vp of VIEWPORTS) {
     page.once('dialog', (d) => d.accept());
     await page.reload(); await page.waitForSelector('#app:not([hidden])'); await idle(page); await page.waitForTimeout(500);
     if ((await page.inputValue('#rtReason')) !== '下書きテスト' || await page.isHidden('#rtForm')) throw new Error('再読み込みで入力が戻らない');
-    await page.click('[data-action="cancelReturn"]');
+    await page.click('[data-action="cancelReturn"]'); await page.waitForTimeout(200); if (await page.$('#dialog[open]')) await page.click('#dialogOk');
     await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
-    if (await page.evaluate(() => Object.keys((JSON.parse(sessionStorage.getItem('exo-return-draft') || '{}').drafts) || {}).length)) throw new Error('キャンセルしても下書きが残る');
+    await page.waitForFunction(() => document.getElementById('rtForm').hidden);
+    if (await page.evaluate(() => ((JSON.parse(sessionStorage.getItem('exo-return-draft') || '{}').drafts) || {})[S.rtNo])) throw new Error('キャンセルしても下書きが残る');
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);

@@ -620,6 +620,8 @@ function setUrl(h, push) {
   S.lastHash = h;
   S.pageHash[(h.match(/^#\/(\w+)/) || [])[1]] = h;
 }
+/** URL の値を読む（壊れた URL でもエラーにしない） */
+function dec(v) { try { return decodeURIComponent(v); } catch (e) { return String(v).replace(/%/g, ''); } }
 /** URL を開く（同じ URL ならその画面を読み込み直す） */
 function goUrl(h) {
   if (location.hash === h) showPage((h.match(/^#\/(\w+)/) || [])[1]); else location.hash = h;
@@ -954,7 +956,14 @@ async function loadDashboard() {
   $('dashSetup').innerHTML = setupCard();
   $('dashKpis').hidden = !setupState().lots; // まだロットが1件も無いときは「0」ばかりの表示を出さない
   $('dashSetup').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
-  if (!setupState().lots && !d.recalls.length) { $('dashBody').innerHTML = mismatch + stale; return; } // ロットが無いうちは空のカードを並べない（準備の案内に集中）
+  if (!setupState().lots && !d.recalls.length) { // ロットが無いうちは空のカードを並べない（準備の案内に集中）
+    const hidden = !$('dashSetup').innerHTML; // 「はじめにやること」を非表示にしたときも、次にやることが分かるようにする
+    $('dashBody').innerHTML = mismatch + stale + (hidden ? `<div class="card span-full">${empty('まだロットがありません', 'box')}
+      <p class="note">入荷を登録すると、検品待ち・使用期限・在庫の状況がここに表示されます。</p>
+      <div class="empty-actions">${goBtn('receipt', '入荷登録へ')}<button type="button" class="btn btn-secondary btn-sm" data-action="guideOpen">ガイドを開く</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="showSetup">「はじめにやること」を再表示</button></div></div>` : '');
+    return;
+  }
   $('dashBody').innerHTML = mismatch + stale +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
@@ -1375,7 +1384,7 @@ async function loadTraceRecent() {
   // URL のとおりに表示する（「戻る」・再読み込み・他の画面からの移動）。表示中でも最新の状態で検索し直す
   const q = (location.hash.match(/[?&]q=([^&]+)/) || [])[1];
   if (q) {
-    $('tlQuery').value = decodeURIComponent(q); $('tlQuery').removeAttribute('aria-invalid');
+    $('tlQuery').value = dec(q); $('tlQuery').removeAttribute('aria-invalid');
     await searchLot({ preventDefault() {}, submitter: null }, true);
     if ($('tlBody').querySelector('.lot-card')) return;
   } else { $('tlBody').innerHTML = ''; $('tlQuery').value = ''; }
@@ -1422,7 +1431,7 @@ function returnDraftFor(no) { return readDrafts()[no] || null; }
 function restoreReturnDraft(no) {
   const d = returnDraftFor(no);
   if (!d || !$('rtForm').hidden) return;
-  if (restoreReturnForm(d)) toast('入力途中の返品内容を戻しました');
+  if (restoreReturnForm(d)) { toast('入力途中の返品内容を戻しました'); if (S.page === 'return') $('rtQty').focus({ preventScroll: false }); }
   else {
     writeDraft(no, null);
     toast('入力途中だった明細は、もう返品できないため内容を戻せませんでした', 'warn');
@@ -1441,8 +1450,8 @@ function restoreReturnForm(saved) {
 
 async function loadReturnRecent() {
   const fromUrl = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
-  if (fromUrl && (!$('rtShipment').innerHTML || decodeURIComponent(fromUrl) !== $('rtShipNo').value.trim().toUpperCase())) {
-    $('rtShipNo').value = decodeURIComponent(fromUrl);
+  if (fromUrl && (!$('rtShipment').innerHTML || dec(fromUrl) !== $('rtShipNo').value.trim().toUpperCase())) {
+    $('rtShipNo').value = dec(fromUrl);
     await findShipmentForReturn(null, false, true);
     if (S.rtNo) restoreReturnDraft(S.rtNo); // 再読み込み・「進む」の前の入力途中の内容があれば戻す
     return;
@@ -1542,7 +1551,12 @@ async function submitReturn(e) {
       if (/取消/.test(err.message) || (avail !== undefined && Number(avail) !== Number($('rtQty').max))) { // 他の利用者の操作で出荷の状態が変わっている
         const saved = captureReturnForm();
         await findShipmentForReturn(null, true, true);
-        restoreReturnForm(saved);
+        const kept = restoreReturnForm(saved);
+        if (!kept) { // 明細がもう返品できない（出荷の取消など）：入力内容は登録されていないことをはっきり伝える
+          writeDraft(S.rtNo, null);
+          alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。入力した返品内容は登録されていません。', 'ng');
+          return;
+        }
         alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng', true);
         if (!$('rtForm').hidden && avail !== undefined) { // 数量の欄のそばでも知らせる（スマホでは上の表示が見えないため）
           alertBox('rtMsg', `返品可能数が ${avail} に変わりました（他の利用者の返品など）。数量を確認してください。`, 'ng', true);
@@ -1744,6 +1758,12 @@ const nowText = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo',
 
 /** 顧客追跡：表示中の結果があれば、開き直したときに最新の状態で出し直す */
 async function loadCustomerTrace() {
+  if (!active(S.M.customers).length) { // 顧客が未登録なら、空の選択欄だけにせず登録先を案内する
+    $('tcBody').innerHTML = '';
+    alertBox('tcMsg', '顧客追跡を使うには、先に顧客を「マスタ設定」で登録してください。', 'info', true,
+      '<button type="button" class="btn btn-secondary btn-sm" data-action="goMaster" data-table="m_customer">顧客を登録する</button>');
+    return;
+  }
   // URL のとおりに表示する（「戻る」・再読み込み）。表示中でも最新の状態で出し直す
   const qs = new URLSearchParams(location.hash.split('?')[1] || '');
   $('tcCustomer').value = qs.get('c') || ''; $('tcFrom').value = qs.get('from') || ''; $('tcTo').value = qs.get('to') || '';
@@ -2262,6 +2282,13 @@ const ACTIONS = {
       await loadDashboard();
     } catch (err) { toast(err.message, 'ng'); }
   }),
+  showSetup: async (el) => busy(el, async () => {
+    try {
+      S.cfg.prefs = await api('saveUserPrefs', { checklistHidden: false });
+      await loadDashboard();
+      focusTo($('setupTitle') || $('main'));
+    } catch (err) { toast(err.message, 'ng'); }
+  }),
   reload: async (el) => busy(el, async () => {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
@@ -2271,7 +2298,10 @@ const ACTIONS = {
     if (S.returnLine && S.returnLine !== el.dataset.id && unsavedScreens().includes('返品登録')
       && !(await ask({ title: '入力中の返品内容を破棄しますか？', body: '別の明細を選ぶと、入力した数量・理由は消えます。', okText: '破棄して選ぶ', danger: true }))) return;
     selectReturnLine(el);
-  }, cancelReturn,
+  }, cancelReturn: async () => {
+    if (unsavedScreens().includes('返品登録') && !(await ask({ title: '入力中の返品内容を破棄しますか？', body: '入力した数量・理由は消えます。', okText: '破棄する', danger: true }))) return;
+    cancelReturn();
+  },
   saveTarget, reextract, closeRecall,
   newMaster: () => editMaster(null),
   editMaster: (el) => editMaster(el.dataset.id),
