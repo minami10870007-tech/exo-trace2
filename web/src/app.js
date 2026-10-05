@@ -218,7 +218,7 @@ async function api(fn, ...args) {
     if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
     if (!res.ok) throw rpcError(res, data);
     if (form && data && data.__unreadable) throw new Error(MSG_OFFLINE); // 応答の途中で切れた：登録できたか分からない
-    if (form && data && data._replayed && S.changed[form]) {
+    if (form && data && data._replayed && data._same === false) { // サーバーが内容を比べて「前回と違う」と答えた
       // 前回送った内容が登録済みだった。いま画面にある（変更後の）内容は登録していないので、成功扱いにせず、そのまま残して知らせる
       resetRequest(form); // 次の確定は、いまの内容の新しい依頼として送る
       const no = data.shipment_no || data.receiptNo || data.returnNo || data.recall_no || data.lot_no || data.lotNo || '';
@@ -1447,7 +1447,7 @@ async function submitShipment(e) {
         return;
       }
       alertBox('shMsg', err.message, 'ng');
-      if (err.unsure) { loadRecentShipments().catch(() => {}); return; } // 引当可能数は前回分が引かれて見えるので更新しない（再送が止まらないように）
+      if (err.unsure || err.replayedOther) { loadRecentShipments().catch(() => {}); return; } // 登録済みの出荷を一覧で確かめられるように。引当可能数は前回分が引かれて見えるので更新しない（再送が止まらないように）
       loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach((l) => updateLineAvail(l))).catch(() => {}); // 引当可能数を最新に
     }
   });

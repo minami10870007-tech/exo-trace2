@@ -147,6 +147,9 @@ try {
   const s2 = await G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', requestId: reqId, lines: [{ productId: prod.id, quantity: 5 }] });
   const s2again = await G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', requestId: reqId, lines: [{ productId: prod.id, quantity: 5 }] });
   ok(s2again.shipment_no === s2.shipment_no && (await G.get_recent_shipments({ limit: 30 })).length === 2, '応答が届かず再送しても二重に出荷しない（同じ依頼番号なら前回の結果を返す）');
+  ok(s2again._replayed === true && s2again._same === true, '同じ内容の再送は「同じ」と分かる');
+  const s2diff = await G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', requestId: reqId, note: '変更', lines: [{ productId: prod.id, quantity: 5 }] });
+  ok(s2diff._replayed === true && s2diff._same === false && s2diff.shipment_no === s2.shipment_no, '内容を変えた再送は「違う」と分かる（いまの内容は登録しない）');
   ok(s2.lines.every((l) => l.lot_no === r1.lotNo) && s2.shipment_no === 'SH-202610-0002', 'lot2 が尽きた後は lot1 から引当');
   ok((await G.get_shipment_by_no({ no: ' sh-202610-0002 ' })).id === s2.id, '出荷番号で検索（大文字小文字・空白を無視）');
   await throwsMsg(G.get_shipment_by_no({ no: 'SH-9' }), /見つかりません/, '出荷番号が無い');

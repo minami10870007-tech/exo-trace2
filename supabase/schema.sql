@@ -376,12 +376,17 @@ create table if not exists exo.t_request (
   result     jsonb not null,
   created_at timestamptz not null default now()
 );
+alter table exo.t_request add column if not exists payload_hash text; -- 送られた内容（依頼番号を除く）。再送の内容が同じかを見分ける
 alter table exo.t_request enable row level security;
 
 /** 前回同じ依頼番号で処理済みなら、その結果（なければ null） */
 create or replace function exo.idem_get(p jsonb, p_fn text) returns jsonb
 language sql stable set search_path = '' as $$
-  select case when jsonb_typeof(r.result) = 'object' then r.result || '{"_replayed": true}' else r.result end from exo.t_request r -- 再送への応答と分かるように印を付ける
+  -- 再送への応答と分かるように印を付ける。_same：前回と同じ内容の再送か（内容を変えたなら、いまの内容は登録していない）
+  select case when jsonb_typeof(r.result) = 'object'
+              then r.result || jsonb_build_object('_replayed', true, '_same', r.payload_hash is not distinct from md5((p - 'requestId')::text))
+              else r.result end
+  from exo.t_request r
   where (p ->> 'requestId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     and r.request_id = (p ->> 'requestId')::uuid and r.fn = p_fn
     and r.user_email is not distinct from lower(auth.jwt() ->> 'email')
@@ -392,8 +397,8 @@ create or replace function exo.idem_put(p jsonb, p_fn text, p_result jsonb) retu
 language plpgsql volatile set search_path = '' as $$
 begin
   if (p ->> 'requestId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
-    insert into exo.t_request (request_id, fn, user_email, result)
-    values ((p ->> 'requestId')::uuid, p_fn, lower(auth.jwt() ->> 'email'), p_result)
+    insert into exo.t_request (request_id, fn, user_email, result, payload_hash)
+    values ((p ->> 'requestId')::uuid, p_fn, lower(auth.jwt() ->> 'email'), p_result, md5((p - 'requestId')::text))
     on conflict (request_id) do nothing;
   end if;
   return p_result;

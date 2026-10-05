@@ -474,6 +474,7 @@ for (const vp of VIEWPORTS) {
     await page.route('**/rpc/register_receipt', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
     try {
       await page.click('#receiptForm button[type="submit"]'); await waitText('#rcMsg', /登録できたか確認できませんでした/);
+      await page.fill('#rcSupLot', 'DUP-TEST-1x'); await page.fill('#rcSupLot', 'DUP-TEST-1'); // 打って戻しただけ（内容は同じ）なら、そのまま成功扱い
       await page.click('#receiptForm button[type="submit"]'); await waitText('#rcMsg', /入荷を登録しました/);
     } finally { await page.unroute('**/rpc/register_receipt'); globalThis.EXPECT_NET_ERR = false; }
     const n = psql(server.sb.db, "select count(*) from exo.t_receipt r join exo.t_lot l on l.id = r.lot_id where l.supplier_lot_no = 'DUP-TEST-1'");
