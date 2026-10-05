@@ -2116,7 +2116,7 @@ async function searchLot(e, fromUrl) {
             <div class="stat"><b>${fmt(l.stock)}</b><span>現在庫</span></div><div class="stat"><b>${esc(l.daysLeft)}</b><span>期限まで（日）</span></div></div>
           <dl class="lot-meta"><div><dt>製造日</dt><dd>${esc(l.manufactured_on || '—')}</dd></div><div><dt>使用期限</dt><dd>${esc(l.expires_on)}</dd></div>
             <div><dt>初回入荷</dt><dd>${esc(l.received_on)}</dd></div><div><dt>原価単価</dt><dd>${fmt(l.unit_cost)} 円</dd></div></dl>
-          <div class="chips">${Object.keys(l.movementTotals).filter((k) => !k.startsWith('TRANSFER_')).map((k) => `<span class="chip">${esc(MOVE_LABEL[k] || k)} ${fmt(Math.abs(l.movementTotals[k]))}</span>`).join('')}</div>
+          <div class="chips">${Object.keys(l.movementTotals).filter((k) => !k.startsWith('TRANSFER_')).sort((a, b) => (Object.keys(MOVE_LABEL).indexOf(a) + 1 || 99) - (Object.keys(MOVE_LABEL).indexOf(b) + 1 || 99)).map((k) => `<span class="chip">${esc(MOVE_LABEL[k] || k)} ${fmt(Math.abs(l.movementTotals[k]))}</span>`).join('')}</div>
           <h3 class="section-title">販売先</h3>
           ${table([{ label: '顧客', cls: 'primary' }, { label: '連絡先', cls: 'wide' }, '出荷番号', { label: '出荷日', cls: 'nowrap' }, { label: '状態', cls: 'status' },
             { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '回収', cls: 'num' }, { label: '手元', cls: 'num' }],
@@ -2188,9 +2188,9 @@ async function searchCustomer(e, fromUrl) {
           <span class="badge b-neutral">${ranged ? '期間内の出荷分 手元' : '手元'} ${fmt(total)}</span></div>
         <p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retraceCustomer">${icon('refresh')}最新にする</button></p>
         ${table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, { label: '出荷日', cls: 'nowrap' }, '出荷番号', { label: '使用期限', cls: 'nowrap' },
-          { label: 'ロット状態', cls: 'status' }, { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '手元', cls: 'num' }],
+          { label: 'ロット状態', cls: 'status' }, { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '回収', cls: 'num' }, { label: '手元', cls: 'num' }],
           r.rows.map((x) => ({ attrs: ` class="clickable${ALERT_STATUS.has(x.lot_status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(x.lot_no)}" tabindex="0" aria-label="${esc(x.lot_no)} を追跡"`, cells: [html(mono(x.lot_no)), x.product, x.shipped_on, html(mono(x.shipment_no)),
-            x.expires_on, html(badge(x.lot_status, x.lot_status_label)), num(x.quantity), num(x.returned), num(x.net)] })),
+            x.expires_on, html(badge(x.lot_status, x.lot_status_label)), num(x.quantity), num(x.returned), num(x.recalled || 0), num(x.net)] })),
           { empty: ranged ? 'この期間の出荷実績はありません' : '出荷実績はありません', emptyIcon: 'truck' })}</div>`;
       if (S.page === 'traceCustomer') {
         const qs = new URLSearchParams({ c: $('tcCustomer').value }); // 再読み込みしても同じ検索を出せるように
@@ -2256,7 +2256,7 @@ function renderRecall(r) {
         <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}" data-ver="${esc(t.updated_at)}">保存</button>
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
     return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t"><span class="sr-only">${esc(t.customer)}・</span>ロット <b class="mono">${esc(t.lot_no)}</b></div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? (Number(t.recovered_qty) > 0 ? '対応済（一部回収不能）' : '対応済（回収不能）') : t.statusLabel)}</div>
-      <div class="target-nums"><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '・' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
+      <div class="target-nums"><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '\u00a0／ ' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
       ${form}</div>`;
   };
   // 顧客ごとにまとめる：連絡（連絡日・方法）は顧客に1回記録すれば、その顧客の対象ロットすべてに反映する
@@ -2601,7 +2601,7 @@ function editMaster(id) {
       return `<div class="field">${lab}<select ${common}><option value="">選択してください</option>${Object.keys(codes).map((c) => `<option value="${c}"${c === v ? ' selected' : ''}>${esc(codes[c])}</option>`).join('')}</select>${hint}</div>`;
     }
     const intField = ['shelf_life_days', 'min_remaining_days', 'reorder_point'].includes(k); // 整数の欄は小数点のないキーボードに
-    const attrs = type === 'number' ? (intField ? ' type="number" inputmode="numeric" step="1" min="0"' : ' type="number" inputmode="decimal" step="any"') : type === 'email' ? ' type="email" inputmode="email"' : type === 'tel' ? ' type="tel" inputmode="tel"' : '';
+    const attrs = type === 'number' ? (intField ? ` type="number" inputmode="numeric" step="1" min="${k === 'shelf_life_days' ? 1 : 0}"` : ' type="number" inputmode="decimal" step="any"') : type === 'email' ? ' type="email" inputmode="email"' : type === 'tel' ? ' type="tel" inputmode="tel"' : '';
     return `<div class="field">${lab}<input ${common}${attrs}${isCode(k) ? ' autocapitalize="characters"' : ''} value="${esc(v)}" autocomplete="off">${hint}</div>`;
   }).join('');
   syncMedicalCode();
@@ -2626,6 +2626,13 @@ async function saveMasterForm(e) {
   const bad = [];
   if ($('mf_email') && $('mf_email').value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test($('mf_email').value.trim())) bad.push(['mf_email', 'メールアドレスの形式が正しくありません（例：info@example.com）']);
   if ($('mf_phone') && $('mf_phone').value.trim() && !/^[0-9+() -]{6,}(\(?(内線|ext\.?|#) ?[0-9]+\)?)?$/i.test($('mf_phone').value.trim())) bad.push(['mf_phone', '電話番号は数字とハイフンで入力してください（例：03-1234-5678、内線は「03-1234-5678 内線12」）']);
+  // 数の欄もまとめて確かめる（1回の保存で、直す所をすべて示す）
+  [['shelf_life_days', 1, '有効期間（日）は1以上の整数で入力してください'], ['min_remaining_days', 0, '最低出荷残期間（日）は0以上の整数で入力してください'],
+    ['reorder_point', 0, '発注点は0以上の整数で入力してください']].forEach(([k, min, m]) => {
+    const el = $('mf_' + k); if (!el || el.value === '') return;
+    const n = Number(el.value); if (!Number.isInteger(n) || n < min) bad.push(['mf_' + k, m]);
+  });
+  if ($('mf_list_price') && $('mf_list_price').value !== '' && !(Number($('mf_list_price').value) >= 0)) bad.push(['mf_list_price', '標準売価は0以上の数値で入力してください']);
   if (bad.length) {
     bad.forEach(([id, m]) => fieldErr($(id), m));
     alertBox('masterMsg', bad.map((b) => b[1]).join('\n'), 'ng', true);

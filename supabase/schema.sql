@@ -1572,7 +1572,7 @@ begin
         'shipped_on', s.shipped_on, 'shipment_no', s.shipment_no, 'product', pr.name, 'lot_no', l.lot_no,
         'supplier_lot_no', l.supplier_lot_no, 'expires_on', l.expires_on, 'lot_status', l.status,
         'lot_status_label', exo.code_label('lot_status', l.status), 'quantity', sl.quantity,
-        'returned', exo.returned_qty(sl.id), 'net', sl.quantity - exo.returned_qty(sl.id))
+        'returned', exo.returned_qty(sl.id, false), 'recalled', exo.returned_qty(sl.id, true), 'net', sl.quantity - exo.returned_qty(sl.id))
         order by s.shipped_on desc, s.id desc, sl.id)
       from exo.t_shipment s
       join exo.t_shipment_line sl on sl.shipment_id = s.id
