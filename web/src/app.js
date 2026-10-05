@@ -311,7 +311,13 @@ function toast(text, kind, action) {
 async function busy(btn, fn) {
   if (btn && btn.dataset.busy === '1') return undefined;
   if (btn) { btn.dataset.busy = '1'; btn.disabled = true; }
-  try { return await fn(); } finally { if (btn) { btn.dataset.busy = ''; btn.disabled = btn.dataset.locked === '1'; } }
+  try { return await fn(); } finally {
+    if (btn) {
+      btn.dataset.busy = ''; btn.disabled = btn.dataset.locked === '1';
+      // 押したボタンを無効にした間にフォーカスが外れたままなら、ボタンに戻す（エラーで終わったときも続けて操作できるように）
+      if (btn.isConnected && !btn.disabled && (!document.activeElement || document.activeElement === document.body)) btn.focus({ preventScroll: true });
+    }
+  }
 }
 
 function options(rows, valueKey, labelFn, placeholder) {
@@ -1455,7 +1461,11 @@ async function cancelShip(btn) {
       if (done && done.dataset.no === btn.dataset.no) alertBox('shDone', `出荷 ${btn.dataset.no} は取消済みです（在庫に戻しました）。`, 'warn', true);
       await loadShipmentPage();
       focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent')); // 取消した出荷の行へ
-    } catch (err) { toast(err.message, 'ng'); }
+    } catch (err) { // 他の利用者が先に取消・返品した等：最新の一覧に描き直して、その行へ
+      toast(err.message + '（最新の状態を表示しました）', 'ng');
+      await loadShipmentPage().catch(() => {});
+      focusTo($('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`) || $('shRecent'));
+    }
   });
 }
 
@@ -2019,7 +2029,7 @@ function renderRecall(r) {
       ${form}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
-  return `<article class="card"><div class="card-head"><div><span class="eyebrow">${esc(r.recall_no)}</span><h2 class="card-title">${esc(r.title)}</h2>
+  return `<article class="card" data-id="${r.id}"><div class="card-head"><div><span class="eyebrow">${esc(r.recall_no)}</span><h2 class="card-title">${esc(r.title)}</h2>
       <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : '', '対象ロット ' + r.lots.join(', ')])}</p></div>
       ${badge(r.status, RECALL_STATUS[r.status] || r.status)}</div>
     <p class="note">${esc(r.reason)}</p>
@@ -2143,13 +2153,20 @@ async function saveTarget(btn) {
   });
 }
 
+/** 回収案件の操作が失敗したとき（他の利用者が先に完了した等）：最新の状態に描き直して、その案件へ */
+async function recallFailed(err, id) {
+  toast(err.message + '（最新の状態を表示しました）', 'ng');
+  await loadRecalls().catch(() => {});
+  focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`) || $('rclList'));
+}
+
 async function reextract(btn) {
   await busy(btn, async () => {
     try {
       const id = btn.dataset.id;
       await api('reextractRecall', id); toast('対象顧客を再抽出しました'); await loadRecalls();
       focusTo($('rclList').querySelector(`[data-action="reextract"][data-id="${CSS.escape(id)}"]`) || $('rclList')); // 描き直したボタンへ
-    } catch (err) { toast(err.message, 'ng'); }
+    } catch (err) { await recallFailed(err, btn.dataset.id); }
   });
 }
 
@@ -2166,8 +2183,8 @@ async function closeRecall(btn) {
       $('toasts').innerHTML = '';
       toast('回収案件 ' + r.recall_no + ' を完了しました');
       await loadRecalls();
-      focusTo($('rclList').firstElementChild);
-    } catch (err) { toast(err.message, 'ng'); }
+      focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(btn.dataset.id)}"]`) || $('rclList').firstElementChild); // 完了した案件へ
+    } catch (err) { await recallFailed(err, btn.dataset.id); }
   });
 }
 
@@ -2317,6 +2334,7 @@ async function saveMasterForm(e) {
       const sid = (saved && saved.id) || data.id;
       const row = (sid && $('msList').querySelector(`[data-action="editMaster"][data-id="${CSS.escape(String(sid))}"]`))
         || [...$('msList').querySelectorAll('[data-action="editMaster"]')].find((r) => r.textContent.includes(String(data[codeKey] || '').trim()));
+      if (row) row.scrollIntoView({ block: 'nearest' }); // スマホで下の固定メニューに隠れないように
       focusTo(row || $('msNew'));
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
