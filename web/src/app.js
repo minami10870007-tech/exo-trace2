@@ -258,6 +258,19 @@ function checkRequired(container, msgId, extra) {
     if (String(el.value || '').trim()) { el.removeAttribute('aria-invalid'); const r = el.closest('.field') && el.closest('.field').querySelector('.req-err'); if (r) r.remove(); } else missing.push(el);
   });
   (extra || []).forEach((el) => { if (!missing.includes(el)) missing.push(el); });
+  // 数字の欄に数字以外が入っている（見た目は入力済みなので「未入力」とは言わない）
+  const bad = [...container.querySelectorAll('input')].filter((el) => el.validity && el.validity.badInput && !el.closest('[hidden]') && !el.disabled);
+  if (bad.length) {
+    bad.forEach((el) => {
+      el.setAttribute('aria-invalid', 'true');
+      const field = el.closest('.field'), old = field && field.querySelector('.req-err');
+      if (old) old.remove();
+      if (field) field.insertAdjacentHTML('beforeend', '<div class="field-err req-err">数字で入力してください</div>');
+    });
+    alertBox(msgId, '数字で入力してください：' + [...new Set(bad.map(labelOf))].join('、'), 'ng', true);
+    bad[0].focus();
+    return false;
+  }
   if (!missing.length) return true;
   missing.forEach((el) => {
     el.setAttribute('aria-invalid', 'true');
@@ -276,7 +289,7 @@ function toast(text, kind, action) {
   const r = !banner.hidden && window.matchMedia('(max-width: 767.98px)').matches ? banner.getBoundingClientRect() : null;
   $('toasts').style.top = r && r.bottom > 0 ? Math.round(r.bottom + 8) + 'px' : '';
   const el = document.createElement('div');
-  el.className = 'toast' + (kind === 'ng' ? ' toast-ng' : '');
+  el.className = 'toast' + (kind === 'ng' ? ' toast-ng' : kind === 'warn' ? ' toast-warn' : '');
   const span = document.createElement('span');
   span.textContent = userText(text);
   el.appendChild(span);
@@ -662,6 +675,7 @@ function showPage(id) {
   document.title = page.label + '｜EXO-TRACE';
   closeSheet();
   window.scrollTo(0, 0); // 保存のお知らせ（トースト）は画面を移っても数秒は残す
+  if ($('guideResume').hidden) $('toasts').style.top = ''; // ガイドの帯が消えたら、帯の下に合わせた位置を戻す
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
@@ -710,7 +724,7 @@ async function reloadMasters(opts = {}) {
   // 選んでいた項目が他の利用者に無効にされたら、黙って空欄・別の項目にせず、外したことを知らせる
   const gone = { rcMsg: [], shMsg: [] };
   const nameOf = (list, id) => { const r = old && (old[list] || []).find((x) => String(x.id) === String(id));
-    return { name: r ? (r.supplier_code || r.product_code || r.customer_code) + ' ' + r.name : '', self: opts.self !== undefined && String(opts.self) === String(id) }; };
+    return { name: r ? (r.supplier_code || r.product_code || r.customer_code) + ' ' + r.name : '', self: !!opts.self && opts.self.key === list && String(opts.self.id) === String(id) }; }; // id は表ごとの連番なので、表の種類も比べる
   [['rcSupplier', 'suppliers', 'rcMsg'], ['rcProduct', 'products', 'rcMsg'], ['shCustomer', 'customers', 'shMsg'], ['tcCustomer', 'customers', '']].forEach(([id, list, msg]) => {
     if (!keep[id]) return;
     $(id).value = keep[id];
@@ -719,6 +733,11 @@ async function reloadMasters(opts = {}) {
   ['rcSupplier', 'rcProduct', 'shCustomer'].forEach((id) => { const o = $(id).options; if (o.length === 2 && !$(id).value && !keep[id]) $(id).value = o[1].value; });
   fillReceiptLocations();
   if (keep.rcLoc && [...$('rcLoc').options].some((o) => o.value === keep.rcLoc)) $('rcLoc').value = keep.rcLoc;
+  else if (keep.rcLoc && $('rcProduct').value === keep.rcProduct) { // 選んでいた保管場所が無効にされた：別の場所に黙って入れ替えない
+    $('rcLoc').value = ''; $('rcLoc').setAttribute('aria-invalid', 'true');
+    const l = old && (old.locations || []).find((x) => String(x.id) === keep.rcLoc);
+    gone.rcMsg.push({ name: l ? l.name : '保管場所', self: false });
+  }
   updateCustHint();
   renderPrereq();
   document.querySelectorAll('.slProd').forEach((sel) => {
@@ -773,7 +792,7 @@ const GUIDE = [
   { key: 'customers', icon: 'user', page: 'master', table: 'm_customer', title: '顧客を登録する', short: '顧客の登録',
     body: '「顧客」タブで販売先を登録します。\n\n医療機関の場合は医療機関コードが必須です。メールアドレス・電話番号は、回収が必要になったときの連絡先として使います。' },
   { key: 'rules', icon: 'check', page: 'master', table: 'rules', title: '販売できる組合せを確認する', short: '販売可否ルールの確認',
-    body: '「販売可否ルール」タブで、商品の規制区分 × 顧客区分ごとに「出荷してよいか」を決めます。\n\n最初の設定は仮のものです。法令上の区分を確認して見直したら、下のチェックを入れてください。' },
+    body: '「販売可否」タブで、商品の規制区分 × 顧客区分ごとに「出荷してよいか」を決めます。\n\n最初の設定は仮のものです。法令上の区分を確認して見直したら、下のチェックを入れてください。' },
   { key: 'lots', icon: 'inbox', page: 'receipt', title: '入荷を登録する', short: '入荷の登録',
     body: '商品が届いたら「入荷登録」で、仕入先ロット番号・使用期限（または製造日）・数量を入力します。\n\n社内ロット番号が自動で付き、ロットは「検品待ち」になります。' },
   { key: 'released', icon: 'check', page: 'inspect', title: '検品して合格にする', short: '検品',
@@ -2157,7 +2176,7 @@ async function loadMaster() {
       cells: cols.map(([k, , type], i) => {
         if (type === 'bool') return html(k === 'is_quarantine' ? (String(r[k]) === 'true' ? badge('warn', '隔離（返品・保留）') : badge('', '通常')) : String(r[k]) === 'true' ? badge('ok', '有効') : badge('', '無効'));
         const v = type && type.startsWith('code:') ? code(type.slice(5), r[k]) : r[k];
-        return k.endsWith('_code') ? html(mono(v)) : i === 0 ? html(`<b>${esc(v)}</b>`) : type === 'number' ? num(v === null || v === '' || v === undefined ? '' : Number(v)) : v;
+        return k.endsWith('_code') ? html(mono(v)) : i === 0 ? html(`<b>${esc(v)}</b>`) : type === 'number' ? (v === null || v === '' || v === undefined ? html('<span class="unset">未設定</span>') : num(Number(v))) : v;
       }) })),
     { empty: def.label + 'が登録されていません。「新規登録」から登録してください。', emptyIcon: 'gear' });
 }
@@ -2234,7 +2253,7 @@ async function saveMasterForm(e) {
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
       guideAfterAction();
-      await reloadMasters({ self: data.id || '' });
+      await reloadMasters({ self: { key: MASTER[t].key, id: data.id || '' } });
       await loadMaster();
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
