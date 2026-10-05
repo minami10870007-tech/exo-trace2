@@ -1603,6 +1603,9 @@ begin
   elsif v_status is not null and v_status not in ('CONTACTED', 'CLOSED') then
     perform exo.fail('状態が不正です。');
   end if;
+  if v_t.status = 'CONTACTED' and v_t.contacted_on is null then
+    perform exo.fail('連絡済の顧客の連絡日は消せません。日付を直す場合は、正しい連絡日を入力してください。');
+  end if;
   if v_t.status <> 'CLOSED' then
     if v_t.shipped_qty > 0 and v_t.recovered_qty + v_t.unrecoverable_qty >= v_t.shipped_qty then
       v_t.status := 'RECOVERED';

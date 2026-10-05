@@ -283,11 +283,14 @@ function checkRequired(container, msgId, extra) {
   return false;
 }
 
-function toast(text, kind, action) {
-  // スマホでガイドの帯が見えているときは、その下に出す（「次のステップへ」を隠さない）
+/** スマホでガイドの帯が見えているときは、お知らせをその下に出す（帯が2行になっても「ガイドに戻る」を隠さない） */
+function placeToasts() {
   const banner = $('guideResume');
   const r = !banner.hidden && window.matchMedia('(max-width: 767.98px)').matches ? banner.getBoundingClientRect() : null;
   $('toasts').style.top = r && r.bottom > 0 ? Math.round(r.bottom + 8) + 'px' : '';
+}
+function toast(text, kind, action) {
+  placeToasts();
   const el = document.createElement('div');
   el.className = 'toast' + (kind === 'ng' ? ' toast-ng' : kind === 'warn' ? ' toast-warn' : '');
   const span = document.createElement('span');
@@ -451,7 +454,7 @@ function hasUnsavedInput() { return unsavedScreens().length > 0; }
 /** 保存していない入力がある画面の名前 */
 function unsavedScreens() {
   const list = [];
-  if (['rcSupLot', 'rcQty', 'rcPrice'].some((id) => $(id).value.trim())) list.push('入荷登録');
+  if (['rcSupLot', 'rcQty', 'rcPrice', 'rcMfg'].some((id) => $(id).value.trim()) || ($('rcExp').value && $('rcExp').dataset.manual)) list.push('入荷登録');
   if ($('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim())) list.push('出荷登録');
   if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim())) list.push('返品登録');
   if ($('rcTitle').value.trim() || $('rcReason').value.trim() || snapshotTargetForms().some((t) => t.fields.length)) list.push('回収管理');
@@ -675,7 +678,7 @@ function showPage(id) {
   document.title = page.label + '｜EXO-TRACE';
   closeSheet();
   window.scrollTo(0, 0); // 保存のお知らせ（トースト）は画面を移っても数秒は残す
-  $('toasts').style.top = ''; // 画面を移ったら、前の画面の帯に合わせた位置を戻す
+  requestAnimationFrame(placeToasts); // 画面を移ったら、その画面の帯に合わせて位置を出し直す
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
@@ -849,7 +852,7 @@ function renderGuide() {
     status += st.rules ? `<span class="guide-state done">${icon('check')}このステップは完了しています</span>` : `<span class="guide-state todo">${icon('flag')}まだ確認していません</span>`;
   } else if (g.key) {
     status += st[g.key] ? `<span class="guide-state done">${icon('check')}このステップは完了しています</span>`
-      : `<span class="guide-state todo">${icon('flag')}まだ登録がありません</span>`;
+      : `<span class="guide-state todo">${icon('flag')}${g.key === 'released' ? 'まだ合格にしたロットがありません' : 'まだ登録がありません'}</span>`;
   } else if (i === 0 && done) {
     status += `<span class="guide-state done">${icon('check')}準備はすべて完了しています</span>`;
   }
@@ -923,6 +926,7 @@ function guideGo() {
 function showResume(on) {
   $('guideResume').hidden = !on;
   document.body.classList.toggle('has-resume', on);
+  requestAnimationFrame(placeToasts);
 }
 
 function setResume(done) {
@@ -1315,7 +1319,7 @@ async function submitShipment(e) {
     const un = unshippableFor(shortP);
     alertBox('shMsg', `「${(S.M.products.find((p) => String(p.id) === shortP) || {}).name}」の数量が引当可能数（${fmt(availFor(shortP))}）を超えています。` +
       (un ? `\nほかに在庫 ${fmt(un.qty)} がありますが、${un.why}のため出荷できません。` : ''), 'ng', true,
-      un ? '<button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="inventory">在庫照会で確認</button>' : '');
+      un ? `<button type="button" class="btn btn-secondary btn-sm" data-action="goInv" data-preset="lots" data-q="${esc((S.M.products.find((p) => String(p.id) === shortP) || {}).product_code || '')}">在庫照会で確認</button>` : '');
     el.focus();
     return;
   }
@@ -1936,7 +1940,7 @@ async function searchCustomer(e, fromUrl) {
       $('tcBody').innerHTML = `<div class="card"><div class="card-head"><div><h2 class="card-title">${esc(c.name)}</h2>
           <p class="card-sub">${joinNw([c.customer_code, code('customer_type', c.customer_type), c.address])}</p>
           <div class="card-sub contacts">${[telLink(c.phone), mailLink(c.email)].filter(Boolean).map((v) => `<span class="contact">${v}</span>`).join('')}</div></div>
-          <span class="badge b-CONTACTED">手元 ${fmt(total)}</span></div>
+          <span class="badge b-neutral">手元 ${fmt(total)}</span></div>
         <p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retraceCustomer">${icon('refresh')}最新にする</button></p>
         ${table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, { label: '出荷日', cls: 'nowrap' }, '出荷番号', { label: '使用期限', cls: 'nowrap' },
           { label: 'ロット状態', cls: 'status' }, { label: '出荷', cls: 'num' }, { label: '返品', cls: 'num' }, { label: '手元', cls: 'num' }],
@@ -1996,7 +2000,7 @@ function renderRecall(r) {
         <div class="field f-date"><label for="cd_${t.id}">連絡日</label><input type="date" id="cd_${t.id}" value="${esc(t.contacted_on)}" data-orig="${esc(t.contacted_on)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
         <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}" data-orig="${esc(t.contact_method)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}" data-orig="${esc(t.unrecoverable_qty)}"></div>
-        ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}" data-orig=""><option value="">変更しない</option><option value="CONTACTED">連絡済にする</option><option value="CLOSED">クローズする</option></select></div>` : ''}
+        ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}" data-orig=""><option value="">変更しない</option>${t.status === 'CONTACTED' ? '' : '<option value="CONTACTED">連絡済にする</option>'}<option value="CLOSED">クローズする</option></select></div>` : ''}
         <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" data-orig="${esc(t.close_reason)}" autocomplete="off" maxlength="500" aria-describedby="cre_${t.id}"><div class="field-err" id="cre_${t.id}" role="alert"></div></div>
         <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}" data-ver="${esc(t.updated_at)}">保存</button>
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
@@ -2080,9 +2084,9 @@ async function saveTarget(btn) {
     return;
   }
   // 連絡済にするなら連絡日が要る（後で返品日などで埋めると、実際と違う記録になるため）
-  if (st && st.value === 'CONTACTED' && !cd.value && !cd.dataset.orig) {
+  if (!cd.value && ((st && st.value === 'CONTACTED' && !cd.dataset.orig) || (cd.dataset.orig && !(st && st.value === 'CLOSED')))) {
     cd.setAttribute('aria-invalid', 'true');
-    $('cre_' + id).textContent = '連絡済にするときは、連絡日を入力してください。';
+    $('cre_' + id).textContent = cd.dataset.orig ? '連絡済の顧客の連絡日は消せません。日付を直す場合は、正しい連絡日を入力してください。' : '連絡済にするときは、連絡日を入力してください。';
     cd.focus();
     return;
   }
@@ -2098,7 +2102,7 @@ async function saveTarget(btn) {
         unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value, expectedUpdatedAt: btn.dataset.ver });
       const who = $('tg_' + id) ? $('tg_' + id).querySelector('.t').textContent : '';
       $('toasts').innerHTML = '';
-      toast(who ? `${who} の進捗を保存しました` : '保存しました');
+      toast(who ? `「${who}」の進捗を保存しました` : '保存しました');
       await loadRecalls(id);
       focusTo($('tg_' + id));
     } catch (err) {
@@ -2106,13 +2110,23 @@ async function saveTarget(btn) {
       if (/他の利用者/.test(err.message)) {
         // この顧客は最新の版で描き直し、入力した値だけを戻す（次の保存で上書きできる）。最新の内容も並べて見せる
         const mine = [...btn.closest('.target-edit').querySelectorAll('input, select')].filter((el) => el.value !== (el.dataset.orig || '')).map((el) => [el.id, el.value]);
+        const who0 = $('tg_' + id) ? $('tg_' + id).querySelector('.t').textContent : '';
         await loadRecalls(id);
+        if (!$('cre_' + id)) { // 他の利用者の返品・クローズで、この顧客はもう更新できない状態になった
+          const labels = { cd_: '連絡日', cm_: '連絡方法', un_: '回収不能数', cr_: 'クローズ理由', st_: '状態' };
+          const typed = mine.filter(([fid, v]) => v && labels[fid.replace(/\d+$/, '')]).map(([fid, v]) => `${labels[fid.replace(/\d+$/, '')]}：${v}`).join('・');
+          const badge = $('tg_' + id) && $('tg_' + id).querySelector('.badge');
+          alertBox('rclMsg', `「${who0}」は、他の利用者の操作（返品登録・クローズなど）で「${badge ? badge.textContent : '更新できない状態'}」になったため、入力した内容は保存されていません。` + (typed ? `\n入力していた内容：${typed}` : ''), 'ng', true);
+          focusTo($('tg_' + id) || $('rclMsg'));
+          return;
+        }
         const latest = [['cd_', '連絡日'], ['cm_', '連絡方法'], ['un_', '回収不能数'], ['cr_', 'クローズ理由']]
           .map(([p, label]) => ($(p + id) ? `${label}：${$(p + id).dataset.orig || '（なし）'}` : '')).filter(Boolean).join('・');
         const d = $('cd_' + id) && $('cd_' + id).closest('details'); if (d) d.open = true;
         mine.forEach(([fid, v]) => { if ($(fid)) $(fid).value = v; });
         msg += `\n最新の内容 … ${latest}`;
       }
+      if (!$('cre_' + id)) { alertBox('rclMsg', msg, 'ng'); return; }
       $('cre_' + id).textContent = msg;
       // 原因の欄に印を付けて移動する
       const field = /連絡日/.test(err.message) ? 'cd_' : /回収不能/.test(err.message) ? 'un_' : /クローズ理由/.test(err.message) ? 'cr_' : '';
