@@ -416,6 +416,21 @@ for (const vp of VIEWPORTS) {
       await page.waitForFunction(() => [...document.getElementById('shCustomer').options].some((o) => /C900/.test(o.textContent)), null, { timeout: 10000 })
         .catch(() => { throw new Error('出荷の顧客一覧に出ない'); });
     } finally { psql(server.sb.db, "delete from exo.m_customer where customer_code = 'C900'"); await page.evaluate(() => { S.mAt = 0; }); }
+    // 選んでいた商品が無効にされたら、黙って空欄にせず知らせ、数量だけの明細で出荷させない
+    const pid = await page.$eval('.slProd', (el) => el.options[1].value);
+    await page.selectOption('.slProd', pid); await page.fill('.slQty', '1');
+    psql(server.sb.db, `update exo.m_product set is_active = false where id = ${pid}`);
+    try {
+      await page.evaluate(() => { S.mAt = 0; });
+      await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+      await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
+      await waitText('#shMsg', /無効にしたため選択を外しました/);
+      if (await page.inputValue('.slProd')) throw new Error('無効な商品が選ばれたまま');
+      if ((await page.getAttribute('.slProd', 'aria-invalid')) !== 'true') throw new Error('商品欄に印がない');
+    } finally { psql(server.sb.db, `update exo.m_product set is_active = true where id = ${pid}`); await page.evaluate(() => { S.mAt = 0; }); }
+    await page.fill('.slQty', ''); await page.fill('.slPrice', '');
+    const left = await page.evaluate(() => unsavedScreens().join() + ' / ' + [...document.querySelectorAll('#shLines .slQty')].map((x) => x.value).join('|') + ' / ' + document.getElementById('shNote').value);
+    if (/出荷/.test(left)) throw new Error('出荷の入力が残っている: ' + left);
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {

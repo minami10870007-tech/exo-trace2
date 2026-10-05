@@ -698,6 +698,7 @@ function closeSheet(restore) {
 }
 
 async function reloadMasters() {
+  const old = S.M;
   S.M = await api('getMasters');
   S.mAt = Date.now();
   const prod = active(S.M.products);
@@ -706,8 +707,15 @@ async function reloadMasters() {
   $('rcProduct').innerHTML = options(prod, 'id', (r) => r.product_code + '　' + r.name, '選択してください');
   $('shCustomer').innerHTML = options(active(S.M.customers), 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   $('tcCustomer').innerHTML = options(S.M.customers, 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
-  ['rcSupplier', 'rcProduct', 'shCustomer', 'tcCustomer'].forEach((id) => { if (keep[id]) $(id).value = keep[id]; });
-  ['rcSupplier', 'rcProduct', 'shCustomer'].forEach((id) => { const o = $(id).options; if (o.length === 2 && !$(id).value) $(id).value = o[1].value; });
+  // 選んでいた項目が他の利用者に無効にされたら、黙って空欄・別の項目にせず、外したことを知らせる
+  const gone = { rcMsg: [], shMsg: [] };
+  const nameOf = (list, id) => { const r = old && (old[list] || []).find((x) => String(x.id) === String(id)); return r ? (r.supplier_code || r.product_code || r.customer_code) + ' ' + r.name : ''; };
+  [['rcSupplier', 'suppliers', 'rcMsg'], ['rcProduct', 'products', 'rcMsg'], ['shCustomer', 'customers', 'shMsg'], ['tcCustomer', 'customers', '']].forEach(([id, list, msg]) => {
+    if (!keep[id]) return;
+    $(id).value = keep[id];
+    if ($(id).value !== keep[id]) { $(id).value = ''; if (msg) { $(id).setAttribute('aria-invalid', 'true'); gone[msg].push(nameOf(list, keep[id])); } }
+  });
+  ['rcSupplier', 'rcProduct', 'shCustomer'].forEach((id) => { const o = $(id).options; if (o.length === 2 && !$(id).value && !keep[id]) $(id).value = o[1].value; });
   fillReceiptLocations();
   if (keep.rcLoc && [...$('rcLoc').options].some((o) => o.value === keep.rcLoc)) $('rcLoc').value = keep.rcLoc;
   updateCustHint();
@@ -716,7 +724,25 @@ async function reloadMasters() {
     const v = sel.value;
     sel.innerHTML = options(prod, 'id', (r) => r.product_code + '　' + r.name, '商品を選択');
     sel.value = v;
+    if (v && sel.value !== v) { // 無効にされた商品：選択を外し、単価・表示も消す
+      sel.value = ''; sel.setAttribute('aria-invalid', 'true'); gone.shMsg.push(nameOf('products', v));
+      const line = sel.closest('.line');
+      line.querySelector('.slPrice').value = ''; setPriceHint(line, null);
+      updateLineAvail(line);
+      sel.setAttribute('aria-invalid', 'true');
+    }
   });
+  const say = (msg, list) => { if (list.length) alertBox(msg, `${list.filter(Boolean).map((x) => `「${x}」`).join('、')}は、他の利用者が無効にしたため選択を外しました。選び直してください。`, 'warn', true); };
+  say('rcMsg', gone.rcMsg); say('shMsg', gone.shMsg);
+}
+
+/** 出荷明細：標準売価が未設定の商品なら、単価の下に案内を出す */
+function setPriceHint(line, p) {
+  const h = line.querySelector('.price-hint');
+  const none = p && (p.list_price === null || p.list_price === '' || p.list_price === undefined);
+  h.textContent = none ? '標準売価が未設定です。単価を入力してください。' : '';
+  h.hidden = !none;
+  line.querySelector('.slPrice').placeholder = none ? '要入力' : '';
 }
 
 /** 他の利用者が変えたマスタ・販売可否ルールを反映する（画面を開いたとき。30秒以内に読み込み済みなら省く） */
@@ -1180,9 +1206,12 @@ function addLine() {
   div.className = 'line';
   div.innerHTML = `<div class="field field-product"><label for="slp${n}">商品</label><select class="slProd" id="slp${n}">${options(active(S.M ? S.M.products : []), 'id', (r) => r.product_code + '　' + r.name, '商品を選択')}</select></div>
     <div class="field"><label for="slq${n}">数量</label><input class="slQty" id="slq${n}" type="number" inputmode="numeric" min="1" step="1" aria-describedby="sla${n}"><div class="line-avail" id="sla${n}" aria-live="polite"></div></div>
-    <div class="field"><label for="slr${n}">単価（円・税抜）</label><input class="slPrice" id="slr${n}" type="number" inputmode="decimal" min="0" step="0.01"></div>
+    <div class="field"><label for="slr${n}">単価（円・税抜）</label><input class="slPrice" id="slr${n}" type="number" inputmode="decimal" min="0" step="0.01" aria-describedby="slh${n}"><div class="field-hint price-hint" id="slh${n}" hidden></div></div>
     <button type="button" class="btn btn-ghost btn-sm line-remove" data-action="removeLine" aria-label="この明細を削除">${icon('x')}削除</button>`;
   $('shLines').appendChild(div);
+  // 有効な商品が1つだけなら、最初から選んでおく（入荷・顧客と同じ）
+  const sel = div.querySelector('.slProd');
+  if (S.M && sel.options.length === 2) { sel.value = sel.options[1].value; const p = S.M.products.find((x) => String(x.id) === sel.value); div.querySelector('.slPrice').value = p && p.list_price !== null && p.list_price !== undefined ? p.list_price : ''; setPriceHint(div, p); }
 }
 
 async function submitShipment(e) {
@@ -1197,6 +1226,9 @@ async function submitShipment(e) {
     if (!l.querySelector('.slPrice').value.trim()) extra.push(l.querySelector('.slPrice'));
   });
   if (!lines.some((l) => l.productId) && lineEls[0]) extra.unshift(lineEls[0].querySelector('.slProd'));
+  // 数量・単価だけ入っていて商品が空の明細は、黙って除かずに商品の選択を求める（一部だけ出荷するのを防ぐ）
+  lineEls.filter((l) => !l.querySelector('.slProd').value && (l.querySelector('.slQty').value.trim() || l.querySelector('.slPrice').value.trim()))
+    .forEach((l) => { if (!extra.includes(l.querySelector('.slProd'))) extra.push(l.querySelector('.slProd')); });
   $('shMsg').dataset.client = '1';
   if (!checkRequired($('shipForm'), 'shMsg', extra)) return;
   // 出荷日の範囲（当日〜過去90日）
@@ -1643,7 +1675,7 @@ function renderInventory() {
   // 日本語入力で打った「ー」（例：BSー2409）は、英数字のあいだならハイフンとしても探す（商品名の「ー」はそのまま）
   const terms = q.split(/\s+/).filter(Boolean).map((t) => [...new Set([t, t.replace(/(?<=[A-Z0-9])ー|ー(?=[A-Z0-9])/g, '-')])]);
   const rows = S.inventory.filter((r) => (!avail || r.allocatable) && (!preset || preset.test(r)) &&
-    (!terms.length || terms.some((alts) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no].some((v) => alts.some((t) => String(v || '').toUpperCase().includes(t))))));
+    (!terms.length || terms.every((alts) => [r.product, r.product_code, r.lot_no, r.supplier_lot_no].some((v) => alts.some((t) => String(v || '').toUpperCase().includes(t))))));
   $('invBody').innerHTML = table([{ label: 'ロット', cls: 'primary' }, { label: '商品', cls: 'wide' }, '仕入先ロット', { label: '保管場所', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' },
     { label: '残日数', cls: 'num' }, { label: '状態', cls: 'status' }, { label: '数量', cls: 'num' }, { label: '', cls: 'actions' }],
     rows.map((r) => ({ attrs: ` class="clickable${ALERT_STATUS.has(r.status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(r.lot_no)}" tabindex="0" aria-label="${esc(r.lot_no)} を追跡"`,
@@ -2167,7 +2199,7 @@ async function saveMasterForm(e) {
   }
   if (!e.submitter || e.submitter.value !== 'save') return; // 変更が無ければキャンセル・閉じるはそのまま閉じる
   e.preventDefault();
-  $('masterFields').querySelectorAll('input').forEach((x) => { if (CODE_FIELD.test(x.id) && x.value) x.value = half(x.value); });
+  $('masterFields').querySelectorAll('input').forEach((x) => { if (CODE_FIELD.test(x.id) && x.value) x.value = /code/.test(x.id) ? half(x.value).toUpperCase() : half(x.value); }); // コードは大文字にそろえる
   const t = S.masterTable, data = { id: $('masterForm').dataset.id || null, expected_updated_at: $('masterForm').dataset.ver || null };
   if (!checkRequired($('masterFields'), 'masterMsg')) return;
   MASTER[t].fields.forEach(([k, , type]) => { data[k] = type === 'bool' ? $('mf_' + k).checked : $('mf_' + k).value; });
@@ -2383,8 +2415,8 @@ document.addEventListener('change', (e) => {
   if (t.classList.contains('slProd')) {
     const p = S.M.products.find((x) => String(x.id) === t.value);
     const pr = t.closest('.line').querySelector('.slPrice');
-    setValue(pr, p ? p.list_price : '');
-    pr.placeholder = p && (p.list_price === null || p.list_price === '' || p.list_price === undefined) ? '標準売価が未設定・入力してください' : '';
+    setValue(pr, p && p.list_price !== null && p.list_price !== undefined ? p.list_price : '');
+    setPriceHint(t.closest('.line'), p);
     updateLineAvail(t.closest('.line'), true);
   } else if (t.classList.contains('ruleChk')) {
     saveRule(t);
@@ -2445,7 +2477,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   $('sheetBackdrop').addEventListener('click', () => closeSheet(true));
   // 画面の向きを変えて広くなったら、スマホ用のメニューは閉じる（横のメニューが出るため）
-  matchMedia('(min-width: 768px)').addEventListener('change', (ev) => { if (ev.matches) closeSheet(false); });
+  matchMedia('(min-width: 768px)').addEventListener('change', (ev) => {
+    if (ev.matches && !$('moreSheet').hidden) { closeSheet(false); if (!document.activeElement || document.activeElement === document.body) focusTo($('main')); }
+  });
   // ガイドは閉じ方（はじめる・あとで見る・Esc）にかかわらず「見た」と記録する
   $('guideDialog').addEventListener('close', onGuideClosed);
   $('guideDialog').addEventListener('keydown', (e) => {
