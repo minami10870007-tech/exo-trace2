@@ -75,7 +75,8 @@ async function sbFetch(path, body, token) {
   try {
     res = await fetch(S.sb.url + path, {
       method: 'POST',
-      headers: { apikey: S.sb.key, 'Content-Type': 'application/json', Authorization: 'Bearer ' + (token || S.sb.key) },
+      // 公開用キーは apikey ヘッダーで送る（新形式の publishable キーは JWT ではないため Authorization には入れない）
+      headers: Object.assign({ apikey: S.sb.key, 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
@@ -287,7 +288,19 @@ function logout(message) {
   storage(false, S.user ? { user: S.user } : null); // 次回ログイン用にメールアドレスだけ残す
   // サーバー側のセッションも無効化（失敗しても画面はログアウトする）
   if (sess && S.sb) sbFetch('/auth/v1/logout?scope=local', undefined, sess.access_token).catch(() => {});
+  clearScreens();
   showLogin(typeof message === 'string' ? message : '');
+}
+
+/** 前の利用者の入力内容・表示結果を消す（共用端末で別の人がログインする場合に備える） */
+function clearScreens() {
+  document.querySelectorAll('#app form').forEach((f) => f.reset());
+  ['dashKpis', 'dashBody', 'rcMsg', 'insMsg', 'insBody', 'shLines', 'shMsg', 'shRecent', 'rtShipment', 'rtMsg', 'invBody', 'tlBody', 'tcBody',
+    'rcLots', 'rclFormMsg', 'rclList', 'msList'].forEach((id) => { if ($(id)) $(id).innerHTML = ''; });
+  $('rtForm').hidden = true;
+  delete $('rcExp').dataset.manual;
+  Object.assign(S, { cfg: null, M: null, inventory: [], returnLine: null, inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product' });
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 }
 
 async function login(e) {
