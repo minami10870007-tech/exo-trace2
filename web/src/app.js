@@ -197,6 +197,7 @@ function focusTo(el) {
 
 /** 結果・エラーの表示。actions: 次の操作のボタン（HTML）。noScroll: 位置とフォーカスを動かさない */
 function alertBox(id, text, kind, noScroll, actions) {
+  delete $(id).dataset.gone; // 別の内容で上書きしたら「選択を外しました」の印も外す
   // 伝票番号・ロット番号（例 RT-202610-0001）は途中で折り返さない
   const body = esc(userText(text || '')).replace(/[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,4}/g, (m) => `<span class="nowrap">${m}</span>`);
   $(id).innerHTML = text ? `<div class="alert alert-${kind || 'ok'}" role="${kind === 'ng' ? 'alert' : 'status'}"><div class="alert-text">${body}${actions ? `<div class="alert-actions">${actions}</div>` : ''}</div></div>` : '';
@@ -660,8 +661,7 @@ function showPage(id) {
   $('pageTitle').textContent = page.label;
   document.title = page.label + '｜EXO-TRACE';
   closeSheet();
-  $('toasts').innerHTML = '';
-  window.scrollTo(0, 0);
+  window.scrollTo(0, 0); // 保存のお知らせ（トースト）は画面を移っても数秒は残す
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
@@ -709,7 +709,8 @@ async function reloadMasters(opts = {}) {
   $('tcCustomer').innerHTML = options(S.M.customers, 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   // 選んでいた項目が他の利用者に無効にされたら、黙って空欄・別の項目にせず、外したことを知らせる
   const gone = { rcMsg: [], shMsg: [] };
-  const nameOf = (list, id) => { const r = old && (old[list] || []).find((x) => String(x.id) === String(id)); return r ? (r.supplier_code || r.product_code || r.customer_code) + ' ' + r.name : ''; };
+  const nameOf = (list, id) => { const r = old && (old[list] || []).find((x) => String(x.id) === String(id));
+    return { name: r ? (r.supplier_code || r.product_code || r.customer_code) + ' ' + r.name : '', self: opts.self !== undefined && String(opts.self) === String(id) }; };
   [['rcSupplier', 'suppliers', 'rcMsg'], ['rcProduct', 'products', 'rcMsg'], ['shCustomer', 'customers', 'shMsg'], ['tcCustomer', 'customers', '']].forEach(([id, list, msg]) => {
     if (!keep[id]) return;
     $(id).value = keep[id];
@@ -732,9 +733,16 @@ async function reloadMasters(opts = {}) {
       sel.setAttribute('aria-invalid', 'true');
     }
   });
-  const who = opts.self ? 'マスタで無効にした' : '他の利用者が無効にした';
-  const say = (msg, list) => { if (list.length) { alertBox(msg, `${list.filter(Boolean).map((x) => `「${x}」`).join('、')}は、${who}ため選択を外しました。選び直してください。`, 'warn', true); $(msg).dataset.gone = '1'; } };
+  const say = (msg, list) => {
+    if (!list.length) return;
+    // 自分がマスタで保存した項目だけ「マスタで無効にした」、それ以外は他の利用者による変更
+    const mine = list.filter((x) => x.self), others = list.filter((x) => !x.self);
+    const part = (xs, who) => xs.length ? `${xs.map((x) => `「${x.name}」`).join('、')}は、${who}ため選択を外しました。` : '';
+    alertBox(msg, part(mine, 'マスタで無効にした') + part(others, '他の利用者が無効にした') + '選び直してください。', 'warn', true);
+    $(msg).dataset.gone = '1';
+  };
   say('rcMsg', gone.rcMsg); say('shMsg', gone.shMsg);
+  return gone;
 }
 
 /** 出荷明細：標準売価が未設定の商品なら、単価の下に案内を出す */
@@ -748,8 +756,8 @@ function setPriceHint(line, p) {
 
 /** 他の利用者が変えたマスタ・販売可否ルールを反映する（画面を開いたとき。30秒以内に読み込み済みなら省く） */
 async function freshMasters(force) {
-  if (!force && S.mAt && Date.now() - S.mAt < 30000) return;
-  await reloadMasters().catch(() => {}); // 読めなくても手元の情報で続ける
+  if (!force && S.mAt && Date.now() - S.mAt < 30000) return null;
+  return reloadMasters().catch(() => null); // 読めなくても手元の情報で続ける（外した項目の一覧を返す）
 }
 
 // ======================================================================
@@ -1201,7 +1209,7 @@ async function changeStatus(btn) {
 // 出荷
 // ======================================================================
 let lineSeq = 0;
-function addLine() {
+function addLine(noAuto) {
   const n = ++lineSeq;
   const div = document.createElement('div');
   div.className = 'line';
@@ -1213,7 +1221,7 @@ function addLine() {
   $('shLines').appendChild(div);
   // 有効な商品が1つだけなら、最初の明細では選んでおく（入荷・顧客と同じ）。追加した明細は空のまま（使わなければ無視される）
   const sel = div.querySelector('.slProd');
-  if (first && S.M && sel.options.length === 2) { sel.value = sel.options[1].value; const p = S.M.products.find((x) => String(x.id) === sel.value); div.querySelector('.slPrice').value = p && p.list_price !== null && p.list_price !== undefined ? p.list_price : ''; setPriceHint(div, p); updateLineAvail(div); }
+  if (first && noAuto !== true && S.M && sel.options.length === 2) { sel.value = sel.options[1].value; const p = S.M.products.find((x) => String(x.id) === sel.value); div.querySelector('.slPrice').value = p && p.list_price !== null && p.list_price !== undefined ? p.list_price : ''; setPriceHint(div, p); updateLineAvail(div); }
 }
 
 async function submitShipment(e) {
@@ -1251,7 +1259,13 @@ async function submitShipment(e) {
     return;
   }
   // 販売可否ルール（確認ダイアログの前に止める）。止まりそうなら、他の利用者がルールを変えていないか最新を読んでから判定する
-  if (lineEls.some((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value))) await freshMasters(true);
+  if (lineEls.some((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value))) {
+    const gone = await freshMasters(true);
+    if (gone && gone.shMsg.length) { // 最新にしたら選択を外した項目がある：その案内を出して止める（他のエラーで上書きしない）
+      const el = $('shipForm').querySelector('[aria-invalid="true"]'); if (el) el.focus();
+      return;
+    }
+  }
   const ng = lineEls.find((l) => l.querySelector('.slProd').value && saleBlocked(l.querySelector('.slProd').value));
   if (ng) {
     const el = ng.querySelector('.slProd');
@@ -1517,7 +1531,10 @@ function restoreReturnForm(saved) {
   const b = $('rtShipment').querySelector(`[data-action="selectReturnLine"][data-id="${saved.line}"]`);
   if (!b) return false;
   selectReturnLine(b, true);
-  Object.entries(saved.values).forEach(([id, v]) => { if ($(id).disabled) return; if ($(id).tagName !== 'SELECT' || [...$(id).options].some((o) => o.value === v)) $(id).value = v; });
+  Object.entries(saved.values).forEach(([id, v]) => {
+    if ($(id).disabled || ($(id).tagName === 'SELECT' && v === '' && $(id).value)) return; // 自動で選んだ場所を空で上書きしない
+    if ($(id).tagName !== 'SELECT' || [...$(id).options].some((o) => o.value === v)) $(id).value = v;
+  });
   $('rtRLocWrap').hidden = $('rtDisp').value !== 'RESTOCK';
   return true;
 }
@@ -2140,7 +2157,7 @@ async function loadMaster() {
       cells: cols.map(([k, , type], i) => {
         if (type === 'bool') return html(k === 'is_quarantine' ? (String(r[k]) === 'true' ? badge('warn', '隔離（返品・保留）') : badge('', '通常')) : String(r[k]) === 'true' ? badge('ok', '有効') : badge('', '無効'));
         const v = type && type.startsWith('code:') ? code(type.slice(5), r[k]) : r[k];
-        return k.endsWith('_code') ? html(mono(v)) : i === 0 ? html(`<b>${esc(v)}</b>`) : type === 'number' ? num(v === '' || v === undefined ? '' : Number(v)) : v;
+        return k.endsWith('_code') ? html(mono(v)) : i === 0 ? html(`<b>${esc(v)}</b>`) : type === 'number' ? num(v === null || v === '' || v === undefined ? '' : Number(v)) : v;
       }) })),
     { empty: def.label + 'が登録されていません。「新規登録」から登録してください。', emptyIcon: 'gear' });
 }
@@ -2209,7 +2226,7 @@ async function saveMasterForm(e) {
   const codeKey = MASTER[t].fields[0][0];
   const before = data.id && S.masterOrig ? String(S.masterOrig[codeKey] || '') : '';
   if (before && before !== String(data[codeKey]).trim() &&
-      !(await ask({ title: 'コードを変更しますか？', body: `コードを「${before}」から「${String(data[codeKey]).trim()}」に変更します。` +
+      !(await ask({ title: before.toUpperCase() === String(data[codeKey]).trim().toUpperCase() ? 'コードを大文字にそろえますか？' : 'コードを変更しますか？', body: `コードを「${before}」から「${String(data[codeKey]).trim()}」に変更します。` +
         (before.toUpperCase() === String(data[codeKey]).trim().toUpperCase() ? '\n（コードは大文字にそろえて保存します）' : ''), okText: '変更して保存' }))) return;
   await busy(e.submitter, async () => {
     try {
@@ -2217,7 +2234,7 @@ async function saveMasterForm(e) {
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
       guideAfterAction();
-      await reloadMasters({ self: true });
+      await reloadMasters({ self: data.id || '' });
       await loadMaster();
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
@@ -2377,7 +2394,7 @@ const ACTIONS = {
   addLine, removeLine: (el) => {
     const line = el.closest('.line'), prev = line.previousElementSibling;
     line.remove();
-    if (!$('shLines').children.length) addLine();
+    if (!$('shLines').children.length) addLine(true); // 自分で消したので、自動では選び直さない
     // 削除したあとのフォーカス：前の明細の商品、無ければ最初の明細の商品
     (prev || $('shLines').firstElementChild).querySelector('.slProd').focus();
     setTimeout(clearGoneNotice, 0);
