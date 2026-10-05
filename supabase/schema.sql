@@ -368,6 +368,37 @@ begin
 end $$;
 
 /** 更新処理を1本ずつ実行する（設計書 P-00 の簡易版：全更新処理を直列化） */
+-- 登録の再送対策：画面から送られた依頼番号（requestId）ごとに結果を覚えておく
+create table if not exists exo.t_request (
+  request_id uuid primary key,
+  fn         text not null,
+  user_email text,
+  result     jsonb not null,
+  created_at timestamptz not null default now()
+);
+alter table exo.t_request enable row level security;
+
+/** 前回同じ依頼番号で処理済みなら、その結果（なければ null） */
+create or replace function exo.idem_get(p jsonb, p_fn text) returns jsonb
+language sql stable set search_path = '' as $$
+  select r.result from exo.t_request r
+  where (p ->> 'requestId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    and r.request_id = (p ->> 'requestId')::uuid and r.fn = p_fn
+    and r.user_email is not distinct from lower(auth.jwt() ->> 'email')
+$$;
+
+/** 処理結果を依頼番号とともに記録して、そのまま返す */
+create or replace function exo.idem_put(p jsonb, p_fn text, p_result jsonb) returns jsonb
+language plpgsql volatile set search_path = '' as $$
+begin
+  if (p ->> 'requestId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    insert into exo.t_request (request_id, fn, user_email, result)
+    values ((p ->> 'requestId')::uuid, p_fn, lower(auth.jwt() ->> 'email'), p_result)
+    on conflict (request_id) do nothing;
+  end if;
+  return p_result;
+end $$;
+
 create or replace function exo.write_lock() returns void
 language plpgsql volatile set search_path = '' as $$
 begin
@@ -674,6 +705,7 @@ begin
   v_result := jsonb_build_object('expired', v_expired, 'mismatches', v_mismatch);
   insert into exo.t_job_log (job, result) values ('daily_check', v_result);
   delete from exo.t_job_log where job = 'daily_check' and ran_at < now() - interval '400 days';
+  delete from exo.t_request where created_at < now() - interval '30 days'; -- 再送対策の記録は30日で消す
   return v_result;
 end $$;
 revoke all on function exo.daily_check() from public;
@@ -1035,6 +1067,8 @@ declare
   v_warning text := '';
 begin
   perform exo.write_lock();
+  -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
+  if exo.idem_get(p, 'register_receipt') is not null then return exo.idem_get(p, 'register_receipt'); end if;
   select * into v_product from exo.m_product where id = exo.j_id(p, 'productId');
   if v_product.id is null then perform exo.fail('商品が見つかりません。画面を再読込してください。'); end if;
   select * into v_supplier from exo.m_supplier where id = exo.j_id(p, 'supplierId');
@@ -1102,7 +1136,7 @@ begin
   if v_temp is not null and (v_temp < v_loc.temp_min or v_temp > v_loc.temp_max) then
     v_warning := '到着時温度が許容範囲（' || v_loc.temp_min || '〜' || v_loc.temp_max || '℃）外です。検品時にQAが評価してください。';
   end if;
-  return jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning);
+  return exo.idem_put(p, 'register_receipt', jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning));
 end $$;
 
 /** ロットステータス変更（受入検品 P-02 と QA によるステータス変更 P-15）。p = { lotId, to, reason, coaConfirmed, expectedStatus } */
@@ -1176,6 +1210,8 @@ declare
   a jsonb;
 begin
   perform exo.write_lock();
+  -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
+  if exo.idem_get(p, 'create_shipment') is not null then return exo.idem_get(p, 'create_shipment'); end if;
   select * into v_customer from exo.m_customer where id = exo.j_id(p, 'customerId');
   if v_customer.id is null then perform exo.fail('顧客が見つかりません。画面を再読込してください。'); end if;
   if not v_customer.is_active then perform exo.fail('無効な顧客には出荷できません。'); end if;
@@ -1245,7 +1281,7 @@ begin
     returning id into v_line_id;
     perform exo.move('SHIPMENT', (a ->> 'lot_id')::bigint, (a ->> 'loc_id')::bigint, -(a ->> 'qty')::integer, 'shipment_line', v_line_id, null, v_user);
   end loop;
-  return exo.shipment_view(v_shipment_id);
+  return exo.idem_put(p, 'create_shipment', exo.shipment_view(v_shipment_id));
 end $$;
 
 /** 出荷取消（P-06）：赤伝で在庫を戻す。返品がある出荷は取消不可。p = { shipmentId, reason } */
@@ -1305,6 +1341,8 @@ declare
   v_recall bigint;
 begin
   perform exo.write_lock();
+  -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
+  if exo.idem_get(p, 'register_return') is not null then return exo.idem_get(p, 'register_return'); end if;
   select * into v_line from exo.t_shipment_line where id = exo.j_id(p, 'shipmentLineId') for update;
   if v_line.id is null then perform exo.fail('出荷明細が見つかりません。画面を再読込してください。'); end if;
   if v_line.status <> 'SHIPPED' then perform exo.fail('取消済の出荷明細には返品を登録できません。'); end if;
@@ -1376,7 +1414,7 @@ begin
       perform exo.extract_targets(v_recall);
     end loop;
   end if;
-  return jsonb_build_object('returnNo', v_return_no, 'recall', v_target.id is not null, 'disposition', v_disp);
+  return exo.idem_put(p, 'register_return', jsonb_build_object('returnNo', v_return_no, 'recall', v_target.id is not null, 'disposition', v_disp));
 end $$;
 
 /**
@@ -1395,6 +1433,8 @@ declare
   v_on_hand integer;
 begin
   perform exo.write_lock();
+  -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
+  if exo.idem_get(p, 'dispose_stock') is not null then return exo.idem_get(p, 'dispose_stock'); end if;
   select * into v_lot from exo.t_lot where id = exo.j_id(p, 'lotId');
   if v_lot.id is null then perform exo.fail('ロットが見つかりません。画面を再読込してください。'); end if;
   select * into v_loc from exo.m_location where id = exo.j_id(p, 'locationId');
@@ -1408,8 +1448,8 @@ begin
   end if;
   perform exo.move(v_kind, v_lot.id, v_loc.id, -v_qty, 'dispose', null,
     case when v_kind = 'DISPOSE' then '廃棄：' else '仕入先返品：' end || v_reason, v_user);
-  return jsonb_build_object('lotNo', v_lot.lot_no, 'quantity', v_qty, 'kind', v_kind,
-    'left', coalesce((select on_hand_qty from exo.t_inventory where lot_id = v_lot.id and location_id = v_loc.id), 0));
+  return exo.idem_put(p, 'dispose_stock', jsonb_build_object('lotNo', v_lot.lot_no, 'quantity', v_qty, 'kind', v_kind,
+    'left', coalesce((select on_hand_qty from exo.t_inventory where lot_id = v_lot.id and location_id = v_loc.id), 0)));
 end $$;
 
 -- ---- トレース（SQL-01 / SQL-02 相当） ----
@@ -1497,6 +1537,8 @@ declare
   l record;
 begin
   perform exo.write_lock();
+  -- 同じ依頼の再送（応答が届かず、もう一度確定した）なら、前回の結果を返す（二重登録を防ぐ）
+  if exo.idem_get(p, 'create_recall') is not null then return exo.idem_get(p, 'create_recall'); end if;
   if v_title is null or v_reason is null then perform exo.fail('件名と回収理由は必須です。'); end if;
   if v_severity is null or v_severity not in ('I', 'II', 'III') then perform exo.fail('重大度（クラスI/II/III）を選択してください。'); end if;
   if jsonb_typeof(p -> 'lotIds') = 'array' then
@@ -1528,7 +1570,7 @@ begin
     end if;
   end loop;
   perform exo.extract_targets(v_recall_id);
-  return exo.recall_view(v_recall_id);
+  return exo.idem_put(p, 'create_recall', exo.recall_view(v_recall_id));
 end $$;
 
 create or replace function public.list_recalls(p jsonb default '{}') returns jsonb

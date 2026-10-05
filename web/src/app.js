@@ -75,16 +75,17 @@ async function loadConfig() {
 
 async function sbFetch(path, body, token) {
   let res;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000); // 電波が弱く応答が返らないときは30秒で打ち切る
   try {
     res = await fetch(S.sb.url + path, {
-      method: 'POST',
+      method: 'POST', signal: ctl.signal,
       // 公開用キーは apikey ヘッダーで送る（新形式の publishable キーは JWT ではないため Authorization には入れない）
       headers: Object.assign({ apikey: S.sb.key, 'Content-Type': 'application/json' }, token ? { Authorization: 'Bearer ' + token } : {}),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
     throw new Error(MSG_OFFLINE);
-  }
+  } finally { clearTimeout(timer); }
   let data = {};
   try { const text = await res.text(); data = text ? JSON.parse(text) : {}; } catch (e) { /* 空応答 */ }
   return { res, data };
@@ -162,8 +163,25 @@ function rpcError(res, data) {
   return new Error('サーバーでエラーが発生しました（' + (data.code || res.status) + '）。時間をおいて再度お試しください。');
 }
 
+// 登録系の処理と、その入力フォーム。応答が届かずにもう一度確定しても二重に登録されないよう、
+// フォームの内容を変えるまでは同じ依頼番号（requestId）を送る（サーバーは同じ番号なら前回の結果を返す）
+const WRITE_FORM = { createShipment: 'shipForm', registerReceipt: 'receiptForm', registerReturn: 'rtForm', disposeStock: 'disposeForm', createRecall: 'recallForm' };
+const MSG_UNSURE = '通信が途切れたため、登録できたか確認できませんでした。入力内容はそのままで、もう一度確定してください（二重に登録されることはありません。登録済みなら、その結果を表示します）。';
+function newId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+S.req = {};
+/** フォームの内容が変わったら、次の確定は新しい依頼として送る */
+function resetRequest(formId) { delete S.req[formId]; }
+
 async function api(fn, ...args) {
   const p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
+  const form = WRITE_FORM[fn];
+  if (form) p.requestId = S.req[form] || (S.req[form] = newId());
+  const online = navigator.onLine;
   const path = '/rest/v1/rpc/' + fn.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
   progress(1);
   try {
@@ -179,7 +197,12 @@ async function api(fn, ...args) {
     if (res.status === 403 && /利用権限|ログインしてください/.test(data.message || '')) { logout(data.message); throw new Error(data.message); }
     if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
     if (!res.ok) throw rpcError(res, data);
+    if (form) resetRequest(form); // 登録できた：次は新しい依頼
     return data;
+  } catch (err) {
+    // 登録の依頼を送ったあとで通信が切れた：登録されたかどうか分からないので、そう伝える（同じ依頼番号で再送すれば安全）
+    if (form && online && err.message === MSG_OFFLINE) throw new Error(MSG_UNSURE);
+    throw err;
   } finally {
     progress(-1);
   }
@@ -240,6 +263,14 @@ function clearMarks(form) {
   form.querySelectorAll('.req-err').forEach((x) => x.remove());
 }
 
+/** 欄の下にエラーを出す（スマホで下の固定ボタンに隠れがちな、フォーム末尾のメッセージの代わりにも見えるように） */
+function fieldErr(el, msg) {
+  el.setAttribute('aria-invalid', 'true');
+  const f = el.closest('.field'); if (!f) return;
+  const old = f.querySelector('.req-err'); if (old) old.remove();
+  f.insertAdjacentHTML('beforeend', `<div class="field-err req-err">${esc(msg)}</div>`);
+}
+
 /** ラベルの文字（「任意」などの補足を除く） */
 function labelOf(el) {
   const lab = el.id && document.querySelector(`label[for="${el.id}"]`);
@@ -276,7 +307,7 @@ function checkRequired(container, msgId, extra) {
     el.setAttribute('aria-invalid', 'true');
     // 欄の下にも「入力してください」を出す（長いフォームで、まとめのメッセージが画面外でも分かるように）
     const field = el.closest('.field');
-    if (field && !field.querySelector('.req-err')) field.insertAdjacentHTML('beforeend', '<div class="field-err req-err">入力してください</div>');
+    if (field && !field.querySelector('.req-err')) field.insertAdjacentHTML('beforeend', `<div class="field-err req-err">${el.tagName === 'SELECT' ? '選択してください' : '入力してください'}</div>`);
   });
   alertBox(msgId, '未入力の項目があります：' + [...new Set(missing.map(labelOf))].join('、'), 'ng', true);
   missing[0].focus(); // フォーカスした欄が見える位置へ（上下の固定表示は scroll-padding で避ける）
@@ -691,14 +722,16 @@ function showPage(id) {
     recall: loadRecalls, master: loadMaster };
   const withMasters = ['master', 'shipment', 'receipt', 'traceCustomer', 'return'].includes(id); // マスタを使う画面は最新にしてから表示
   if (id === 'receipt') loaders.receipt = async () => {};
+  let done = Promise.resolve();
   if (loaders[id]) {
-    (withMasters ? freshMasters().then(() => { if (id === 'receipt' || id === 'shipment') renderPrereq(); return loaders[id](); }) : loaders[id]()).then(() => {
+    done = (withMasters ? freshMasters().then(() => { if (id === 'receipt' || id === 'shipment') renderPrereq(); return loaders[id](); }) : loaders[id]()).then(() => {
       // 「戻る」で一覧に戻ったら、開いた行にフォーカスを戻す
       const bf = S.backFocus;
       if (bf && bf.page === id) { S.backFocus = null; const row = document.querySelector('#page-' + id + ' ' + bf.sel); if (row) { row.focus(); row.scrollIntoView({ block: 'center' }); } }
     }).catch((e) => toast(e.message, 'ng'));
   }
   if (id === 'receipt' || id === 'shipment') renderPrereq();
+  return done;
 }
 
 function go(id) {
@@ -1690,6 +1723,7 @@ async function submitReturn(e) {
   if (!Number.isInteger(q) || q < 1 || q > Number($('rtQty').max)) {
     $('rtQty').setAttribute('aria-invalid', 'true');
     alertBox('rtMsg', `返品数量は 1〜${fmt($('rtQty').max)} の整数で入力してください。`, 'ng', true);
+    fieldErr($('rtQty'), `1〜${fmt($('rtQty').max)} の整数で入力してください`);
     $('rtQty').focus();
     return;
   }
@@ -1725,10 +1759,11 @@ async function submitReturn(e) {
         alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng', true);
         if (!$('rtForm').hidden && avail !== undefined) { // 数量の欄のそばでも知らせる（スマホでは上の表示が見えないため）
           alertBox('rtMsg', `返品可能数が ${avail} に変わりました（他の利用者の返品など）。数量を確認してください。`, 'ng', true);
+          fieldErr($('rtQty'), `返品可能数が ${avail} に変わりました`);
           $('rtQty').setAttribute('aria-invalid', 'true'); $('rtQty').focus();
         }
       } else if (/返品数量|返品可能数/.test(err.message)) {
-        $('rtQty').setAttribute('aria-invalid', 'true'); $('rtQty').focus();
+        fieldErr($('rtQty'), err.message.replace(/（BR-\d+）/, '')); $('rtQty').focus();
       } else if (/返品日/.test(err.message)) {
         $('rtDate').setAttribute('aria-invalid', 'true'); $('rtDate').focus();
       }
@@ -1806,6 +1841,7 @@ async function openDispose(btn) {
   if (btn.dataset.ok && !(await ask({ title: '出荷できる在庫を処分しますか？', body: `ロット ${btn.dataset.lot} は合格済みで出荷できる在庫です。破損などで処分する場合だけ続けてください。`, okText: '処分の記録へ進む', danger: true }))) return;
   const f = $('disposeForm');
   f.dataset.dirty = '';
+  resetRequest('disposeForm'); // 別の在庫の処分は別の依頼
   f.dataset.status = btn.dataset.status;
   f.reset();
   f.dataset.lotId = btn.dataset.lotId;
@@ -2185,7 +2221,7 @@ async function closeRecall(btn) {
     : (Number(btn.dataset.stock) > 0 ? `回収対象ロットの在庫 ${fmt(btn.dataset.stock)} が、まだ処分されていません（在庫照会で確認できます）。在庫照会の「処分」から廃棄・仕入先返品を記録してから完了することをおすすめします。\n\n` : '') +
       (Number(btn.dataset.targets) > 0 ? '完了後は対象顧客の進捗を変更できません。' : '出荷実績のある顧客はいません。完了すると、この回収案件は終了します。');
   if (open) { await ask({ title: '回収はまだ完了できません', body, okText: 'わかりました', noCancel: true }); return; }
-  if (!(await ask({ title: Number(btn.dataset.stock) > 0 ? '未処分の在庫がありますが、完了しますか？' : '回収を完了しますか？', body, okText: '完了にする' }))) return;
+  if (!(await ask({ title: Number(btn.dataset.stock) > 0 ? '未処分の在庫がありますが、完了しますか？' : '回収を完了しますか？', body, okText: '完了にする', danger: true }))) return;
   await busy(btn, async () => {
     try {
       const r = await api('closeRecall', btn.dataset.id);
@@ -2498,7 +2534,7 @@ const ACTIONS = {
     } catch (err) { toast(err.message, 'ng'); }
   }),
   reload: async (el) => busy(el, async () => {
-    try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
+    try { await reloadMasters(); await showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
   addLine, removeLine: (el) => {
     const line = el.closest('.line'), prev = line.previousElementSibling;
@@ -2551,6 +2587,7 @@ function clearGoneNotice() {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
+  const fm = t.closest && t.closest('form'); if (fm && fm.id) resetRequest(fm.id);
   setTimeout(clearGoneNotice, 0);
   if (t.id && CODE_FIELD.test(t.id) && t.value && half(t.value) !== t.value) t.value = half(t.value);
   if (t.getAttribute && t.getAttribute('aria-invalid') === 'true' && (String(t.value || '').trim() || !t.required)) clearInvalid(t);
@@ -2580,6 +2617,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('input', (e) => {
+  const fm = e.target.closest && e.target.closest('form'); if (fm && fm.id) resetRequest(fm.id); // 内容を変えたら別の依頼
   if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && (String(e.target.value || '').trim() || !e.target.required)) clearInvalid(e.target);
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();

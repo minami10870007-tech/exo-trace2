@@ -185,7 +185,7 @@ async function newPage(vp) {
   const errs = [];
   page.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
   // 4xx 応答のリソース読込エラー（入力エラー等の想定内応答）はブラウザが自動出力するため除外
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of 4\d\d/.test(m.text())) errs.push('console: ' + m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of 4\d\d/.test(m.text()) && !(globalThis.EXPECT_NET_ERR && /net::ERR_FAILED/.test(m.text()))) errs.push('console: ' + m.text()); });
   await page.addInitScript(() => { document.addEventListener('securitypolicyviolation', (e) => console.error('CSP violation: ' + e.violatedDirective + ' ' + e.blockedURI)); });
   return { ctx, page, errs };
 }
@@ -463,6 +463,22 @@ for (const vp of VIEWPORTS) {
     await page.click('#masterForm button[value="save"]'); await page.waitForFunction(() => !document.getElementById('masterDialog').open); await idle(page);
     await page.waitForFunction(() => document.activeElement && document.activeElement.closest('#msList'), null, { timeout: 5000 })
       .catch(async () => { throw new Error('フォーカスが一覧に戻らない: ' + (await page.evaluate(() => document.activeElement && document.activeElement.tagName))); });
+  });
+  await step('登録の応答が届かなくても、もう一度確定して二重に登録されない', async () => {
+    await page.click('#bottomNav [data-page="receipt"]'); await idle(page);
+    await page.selectOption('#rcSupplier', { index: 1 }); await page.selectOption('#rcProduct', { index: 1 }); await page.waitForTimeout(200);
+    if (!(await page.inputValue('#rcLoc'))) await page.selectOption('#rcLoc', { index: 1 });
+    await page.fill('#rcSupLot', 'DUP-TEST-1'); await page.fill('#rcMfg', '2026-09-01'); await page.fill('#rcQty', '1'); await page.fill('#rcPrice', '100');
+    await page.dispatchEvent('#rcMfg', 'change');
+    let lost = true; globalThis.EXPECT_NET_ERR = true; // わざと通信を切るので、その通信エラーは問題にしない
+    await page.route('**/rpc/register_receipt', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
+    try {
+      await page.click('#receiptForm button[type="submit"]'); await waitText('#rcMsg', /登録できたか確認できませんでした/);
+      await page.click('#receiptForm button[type="submit"]'); await waitText('#rcMsg', /入荷を登録しました/);
+    } finally { await page.unroute('**/rpc/register_receipt'); globalThis.EXPECT_NET_ERR = false; }
+    const n = psql(server.sb.db, "select count(*) from exo.t_receipt r join exo.t_lot l on l.id = r.lot_id where l.supplier_lot_no = 'DUP-TEST-1'");
+    if (n !== '1') throw new Error('入荷が ' + n + ' 件登録された');
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
