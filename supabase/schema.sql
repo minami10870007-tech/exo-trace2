@@ -1592,6 +1592,8 @@ begin
       v_t.status := 'RECOVERED';
     elsif v_t.status = 'RECOVERED' then
       v_t.status := case when v_t.contacted_on is not null then 'CONTACTED' else 'NOT_CONTACTED' end;
+    elsif v_t.status = 'NOT_CONTACTED' and v_t.contacted_on is not null then
+      v_t.status := 'CONTACTED';  -- 連絡日を記録したら連絡済
     end if;
   end if;
   update exo.t_recall_target set contacted_on = v_t.contacted_on, contact_method = v_t.contact_method,

@@ -426,6 +426,30 @@ for (const vp of VIEWPORTS) {
     if (await page.$('#rtShipment [data-action="newReturn"]')) { await page.click('#rtShipment [data-action="newReturn"]'); await idle(page); }
     if (!(await page.$('#rtRecent [data-action="pickReturnShipment"]'))) throw new Error('最近の出荷が出ない');
   });
+  await step('同時編集：回収状況は競合後にもう一度保存でき、マスタは他の人の変更を消さない', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
+    const d = page.locator('#rclList .target-edit').first();
+    if (await d.count()) {
+      if (!(await d.getAttribute('open'))) await d.locator('summary').click();
+      const tid = await d.locator('[data-action="saveTarget"]').getAttribute('data-id');
+      await page.selectOption('#cm_' + tid, '訪問');
+      psql(server.sb.db, `update exo.t_recall_target set contact_method = '電話', updated_at = now() where id = ${tid}`);
+      await page.click(`[data-action="saveTarget"][data-id="${tid}"]`); await waitText('#cre_' + tid, /他の利用者/);
+      if ((await page.inputValue('#cm_' + tid)) !== '訪問') throw new Error('自分の入力が消えた');
+      await page.click(`[data-action="saveTarget"][data-id="${tid}"]`); await waitText('#toasts', /保存しました/);
+      if (psql(server.sb.db, `select contact_method from exo.t_recall_target where id = ${tid}`) !== '訪問') throw new Error('2回目の保存ができない');
+    }
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="master"]'); await idle(page);
+    await page.click('#msTabs [data-table="m_product"]'); await idle(page);
+    await page.click('#msList tr[data-action]');
+    const pid = await page.evaluate(() => document.getElementById('masterForm').dataset.id);
+    await page.fill('#mf_name', (await page.inputValue('#mf_name')) + '（改）');
+    psql(server.sb.db, `update exo.m_product set list_price = 99999, updated_at = now() where id = ${pid}`);
+    await page.click('#masterForm button[value="save"]'); await waitText('#masterMsg', /他の利用者が先に更新/);
+    if ((await page.inputValue('#mf_list_price')) !== '99999') throw new Error('他の人の変更（標準売価）が取り込まれない');
+    await page.click('#masterForm button[value="save"]'); await page.waitForFunction(() => !document.getElementById('masterDialog').open);
+    if (psql(server.sb.db, `select list_price::int || '|' || (name like '%（改）') from exo.m_product where id = ${pid}`) !== '99999|true') throw new Error('他の人の変更が消えた');
+  });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
     if (n !== '1') throw new Error('created_by がログインユーザーでない');

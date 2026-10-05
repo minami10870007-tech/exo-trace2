@@ -197,7 +197,9 @@ function focusTo(el) {
 
 /** 結果・エラーの表示。actions: 次の操作のボタン（HTML）。noScroll: 位置とフォーカスを動かさない */
 function alertBox(id, text, kind, noScroll, actions) {
-  $(id).innerHTML = text ? `<div class="alert alert-${kind || 'ok'}" role="${kind === 'ng' ? 'alert' : 'status'}"><div class="alert-text">${esc(userText(text))}${actions ? `<div class="alert-actions">${actions}</div>` : ''}</div></div>` : '';
+  // 伝票番号・ロット番号（例 RT-202610-0001）は途中で折り返さない
+  const body = esc(userText(text || '')).replace(/[A-Z][A-Z0-9]*(?:-[A-Z0-9]+){1,4}/g, (m) => `<span class="nowrap">${m}</span>`);
+  $(id).innerHTML = text ? `<div class="alert alert-${kind || 'ok'}" role="${kind === 'ng' ? 'alert' : 'status'}"><div class="alert-text">${body}${actions ? `<div class="alert-actions">${actions}</div>` : ''}</div></div>` : '';
   // 結果・エラーは見える位置まで移動し、フォーカスも移す（固定ボタンの下に隠れない・見失わないように）
   if (text && !noScroll) {
     $(id).scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -920,6 +922,12 @@ function autoExpiry() {
 async function submitReceipt(e) {
   e.preventDefault();
   if (!checkRequired($('receiptForm'), 'rcMsg')) return;
+  const bad = (id, msg) => { $(id).setAttribute('aria-invalid', 'true'); alertBox('rcMsg', msg, 'ng', true); $(id).focus(); return true; };
+  const q = Number($('rcQty').value), d = $('rcDate').value, exp = $('rcExp').value, mfg = $('rcMfg').value;
+  if (!(Number.isInteger(q) && q >= 1) && bad('rcQty', '入荷数量は1以上の整数で入力してください。')) return;
+  if ($('rcDate').max && d > $('rcDate').max && bad('rcDate', '入荷日は当日以前の日付を入力してください。')) return;
+  if (mfg && mfg > d && bad('rcMfg', '製造日は入荷日以前の日付を入力してください。')) return;
+  if (exp && exp <= d && bad('rcExp', '使用期限は入荷日より後の日付を入力してください。')) return;
   await busy(e.submitter, async () => {
     alertBox('rcMsg', '');
     try {
@@ -932,6 +940,9 @@ async function submitReceipt(e) {
       delete $('rcExp').dataset.manual;
       guideAfterAction();
     } catch (err) {
+      const field = [[/入荷数量/, 'rcQty'], [/入荷日/, 'rcDate'], [/製造日/, 'rcMfg'], [/使用期限/, 'rcExp'], [/仕入単価/, 'rcPrice'], [/仕入先ロット番号/, 'rcSupLot'],
+        [/保管場所/, 'rcLoc'], [/到着時温度/, 'rcTemp']].find(([re]) => re.test(err.message));
+      if (field) $(field[1]).setAttribute('aria-invalid', 'true');
       alertBox('rcMsg', err.message, 'ng');
     }
   });
@@ -1130,7 +1141,7 @@ async function submitShipment(e) {
       if (m) lineEls.filter((l) => { const p = S.M.products.find((x) => String(x.id) === l.querySelector('.slProd').value); return p && p.name === m[1]; })
         .forEach((l) => l.querySelector(/販売できません/.test(err.message) ? '.slProd' : '.slQty').setAttribute('aria-invalid', 'true'));
       alertBox('shMsg', err.message, 'ng');
-      loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach(updateLineAvail)).catch(() => {}); // 引当可能数を最新に
+      loadInventory().then(() => document.querySelectorAll('#shLines .line').forEach((l) => updateLineAvail(l))).catch(() => {}); // 引当可能数を最新に
     }
   });
 }
@@ -1138,7 +1149,7 @@ async function submitShipment(e) {
 /** 出荷画面：明細ごとの引当可能数を出せるよう在庫を読む */
 async function loadShipmentPage() {
   await Promise.all([loadRecentShipments(), loadInventory().catch(() => {})]);
-  document.querySelectorAll('#shLines .line').forEach(updateLineAvail);
+  document.querySelectorAll('#shLines .line').forEach((l) => updateLineAvail(l));
 }
 
 /** 明細の「引当可能 N」表示（当日時点の目安。最終判定はサーバー） */
@@ -1163,7 +1174,7 @@ function saleBlocked(productId) {
     : `この顧客には販売できません（${code('regulatory_class', p.regulatory_class)} → ${code('customer_type', c.customer_type)}）`;
 }
 
-function updateLineAvail(line) {
+function updateLineAvail(line, byUser) {
   const pid = line.querySelector('.slProd').value;
   const out = line.querySelector('.line-avail');
   const n = pid ? availFor(pid) : null;
@@ -1175,7 +1186,7 @@ function updateLineAvail(line) {
   if (!blocked) line.querySelector('.slProd').removeAttribute('aria-invalid');
   if (!(n !== null && qty > n) && qty > 0) line.querySelector('.slQty').removeAttribute('aria-invalid');
   // サーバーのエラーが出ている状態で入力を直したら、もう一度確定するよう案内する
-  if ($('shMsg').dataset.client !== '1' && $('shMsg').querySelector('.alert-ng') && !$('shMsg').dataset.changed) {
+  if (byUser && $('shMsg').dataset.client !== '1' && $('shMsg').querySelector('.alert-ng') && !$('shMsg').dataset.changed) {
     $('shMsg').dataset.changed = '1';
     $('shMsg').querySelector('.alert-text').insertAdjacentHTML('beforeend', '<div class="alert-note">入力を変更しました。内容を確認して、もう一度「出荷を確定」を押してください。</div>');
   }
@@ -1242,7 +1253,9 @@ async function findShipmentForReturn(e, keepMsg) {
       if (!keepMsg) focusTo($('rtShipment').querySelector('.card-sub'));
     } catch (err) {
       $('rtShipment').innerHTML = '';
-      alertBox('rtFindMsg', err.message, 'ng');
+      history.replaceState(null, '', '#/return');
+      await loadReturnRecent().catch(() => {}); // 見つからないときは最近の出荷から選べるようにする
+      alertBox('rtFindMsg', err.message + '\n出荷番号を確かめるか、下の「最近の出荷」から選んでください。', 'ng');
     }
   });
 }
@@ -1482,11 +1495,11 @@ async function searchLot(e) {
     $('tlQuery').focus();
     return;
   }
-  $('tlRecent').innerHTML = '';
   await busy(e.submitter, async () => {
     try {
       const lots = await api('traceLot', $('tlQuery').value);
       const fold = lots.length > 1; // 複数見つかったときは、見出しだけを並べて開いて見る
+      if (lots.length) $('tlRecent').innerHTML = ''; // 見つからなかったときは「最近のロット」を残す
       $('tlBody').innerHTML = (lots.length ? `<p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retrace">${icon('refresh')}最新にする</button></p><p class="result-count" role="status">${lots.length}件見つかりました${lots.length >= 20 ? '（先頭20件。番号をもう少し詳しく入れると絞り込めます）' : ''}</p>` : '') + (lots.length ? lots.map((l) => {
         const net = l.shipments.reduce((s, x) => s + x.net, 0);
         const customers = new Set(l.shipments.filter((s) => s.net > 0).map((s) => s.customer_code)).size;
@@ -1608,7 +1621,7 @@ function renderRecall(r) {
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
     const contacts = [t.contact_name ? esc(t.contact_name) : '', telLink(t.phone), mailLink(t.email)].filter(Boolean);
     return `<div class="target" id="tg_${t.id}"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
-        <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? '対応済（一部回収不能）' : t.statusLabel)}</div>
+        <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div></div>${badge(t.status, t.status === 'RECOVERED' && Number(t.unrecoverable_qty) > 0 ? (Number(t.recovered_qty) > 0 ? '対応済（一部回収不能）' : '対応済（回収不能）') : t.statusLabel)}</div>
       <div class="target-nums"><span class="nowrap">ロット <b class="mono">${esc(t.lot_no)}</b></span><span title="出荷数から通常の返品を引いた数">出荷（返品後） <b>${fmt(t.shipped_qty)}</b></span><span>回収 <b>${fmt(t.recovered_qty)}</b></span>${Number(t.unrecoverable_qty) ? `<span>回収不能 <b>${fmt(t.unrecoverable_qty)}</b></span>` : ''}<span>手元 <b>${fmt(Math.max(0, t.shipped_qty - t.recovered_qty - t.unrecoverable_qty))}</b></span>${t.contacted_on ? `<span>連絡 <b>${esc(t.contacted_on)}${t.contact_method ? '・' + esc(t.contact_method) : ''}</b></span>` : ''}</div>
       ${form}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
@@ -1637,7 +1650,9 @@ async function submitRecall(e) {
   await busy(e.submitter, async () => {
     try {
       const r = await api('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds });
-      const createdMsg = `回収案件 ${r.recall_no} を登録しました（対象顧客 ${r.targets.filter((t) => Number(t.shipped_qty) > 0).length} 件）。対象顧客に連絡し、進捗を記録してください。`;
+      const nTargets = r.targets.filter((t) => Number(t.shipped_qty) > 0).length;
+      const createdMsg = nTargets ? `回収案件 ${r.recall_no} を登録しました（対象顧客 ${nTargets} 件）。対象顧客に連絡し、進捗を記録してください。`
+        : `回収案件 ${r.recall_no} を登録しました。出荷先の顧客はいません（対象顧客 0 件）。社内の在庫を処分してから、回収を完了してください。`;
       $('recallForm').reset();
       $('rcNew').open = false;
       await loadRecalls();
@@ -1698,8 +1713,18 @@ async function saveTarget(btn) {
       await loadRecalls(id);
       focusTo($('tg_' + id));
     } catch (err) {
-      if (/他の利用者/.test(err.message)) await loadRecalls(); // 最新の状態に描き直す（入力中の内容は残す）
-      $('cre_' + id).textContent = userText(err.message);
+      let msg = userText(err.message);
+      if (/他の利用者/.test(err.message)) {
+        // この顧客は最新の版で描き直し、入力した値だけを戻す（次の保存で上書きできる）。最新の内容も並べて見せる
+        const mine = [...btn.closest('.target-edit').querySelectorAll('input, select')].filter((el) => el.value !== (el.dataset.orig || '')).map((el) => [el.id, el.value]);
+        await loadRecalls(id);
+        const latest = [['cd_', '連絡日'], ['cm_', '連絡方法'], ['un_', '回収不能数'], ['cr_', 'クローズ理由']]
+          .map(([p, label]) => ($(p + id) ? `${label}：${$(p + id).dataset.orig || '（なし）'}` : '')).filter(Boolean).join('・');
+        const d = $('cd_' + id) && $('cd_' + id).closest('details'); if (d) d.open = true;
+        mine.forEach(([fid, v]) => { if ($(fid)) $(fid).value = v; });
+        msg += `\n最新の内容 … ${latest}`;
+      }
+      $('cre_' + id).textContent = msg;
       // 原因の欄に印を付けて移動する
       const field = /連絡日/.test(err.message) ? 'cd_' : /回収不能/.test(err.message) ? 'un_' : /クローズ理由/.test(err.message) ? 'cr_' : '';
       if (field && $(field + id)) { $(field + id).setAttribute('aria-invalid', 'true'); $(field + id).focus(); } else focusTo($('cre_' + id));
@@ -1819,6 +1844,7 @@ function renderRules() {
 function editMaster(id) {
   const t = S.masterTable, def = MASTER[t];
   const r = id ? S.M[def.key].find((x) => String(x.id) === String(id)) : { is_active: true, min_remaining_days: 90 };
+  S.masterOrig = Object.assign({}, r); // 開いたときの内容（他の利用者との競合時に、自分が変えた項目を見分けるため）
   $('masterTitle').textContent = def.label + (id ? 'の編集' : 'の新規登録');
   $('masterForm').dataset.id = id || '';
   $('masterForm').dataset.dirty = '';
@@ -1867,12 +1893,29 @@ async function saveMasterForm(e) {
       await loadMaster();
     } catch (err) {
       if (/他の利用者が先に更新/.test(err.message)) {
-        // 最新の版にしておく（内容を確認したうえで、もう一度保存すれば上書きできる）
+        // 最新の内容を取り込む：自分が変えていない項目は最新の値に、両方が変えた項目は自分の値のまま並べて見せる
         await reloadMasters().catch(() => {});
         const cur = S.M[MASTER[t].key].find((x) => String(x.id) === String(data.id));
         $('masterForm').dataset.ver = cur ? cur.updated_at : '';
-        if (cur) { const diff = MASTER[t].fields.filter(([k]) => String(cur[k] ?? '') !== String(data[k] ?? '')).map(([, label]) => label);
-          err.message += diff.length ? `\n（他の利用者の内容と異なる項目：${diff.join('、')}）` : ''; }
+        const orig = S.masterOrig || {};
+        const norm = (v) => String(v === null || v === undefined ? '' : v);
+        const both = [];
+        if (cur) MASTER[t].fields.forEach(([k, label, type]) => {
+          const el = $('mf_' + k); if (!el) return;
+          const changedByMe = norm(data[k]) !== norm(orig[k]);
+          const changedByOther = norm(cur[k]) !== norm(orig[k]);
+          if (!changedByOther) return;
+          if (!changedByMe) { if (type === 'bool') el.checked = String(cur[k]) === 'true'; else el.value = norm(cur[k]); }
+          else if (norm(cur[k]) !== norm(data[k])) {
+            both.push(`${label}（他の利用者：${type && type.startsWith('code:') ? code(type.slice(5), cur[k]) : norm(cur[k]) || '空欄'} ／ あなた：${type && type.startsWith('code:') ? code(type.slice(5), data[k]) : norm(data[k]) || '空欄'}）`);
+            el.setAttribute('aria-invalid', 'true');
+          }
+        });
+        S.masterOrig = Object.assign({}, cur);
+        alertBox('masterMsg', 'このデータは他の利用者が先に更新しています。あなたが変更していない項目は最新の内容にしました。' +
+          (both.length ? `\n両方が変更した項目：${both.join('、')}\n内容を確認して「保存」すると、あなたの値で保存します。` : '\n内容を確認して、もう一度「保存」してください。'), 'ng');
+        syncMedicalCode();
+        return;
       }
       alertBox('masterMsg', err.message, 'ng');
       markMasterError(err.message);
@@ -1897,6 +1940,7 @@ async function saveRule(chk, isUndo) {
     toast(err.message, 'ng');
   } finally {
     document.querySelectorAll(`.ruleChk[data-rc="${rc}"][data-ct="${ct}"]`).forEach((c) => { c.disabled = false; });
+    if (document.activeElement === document.body && chk.isConnected) chk.focus(); // 保存中に外れたフォーカスを戻す
   }
 }
 
@@ -1907,6 +1951,7 @@ const ACTIONS = {
   go: (el) => { if (el.dataset.page === 'inventory') { S.invPreset = ''; $('invFilter').value = ''; alertBox('invMsg', ''); } go(el.dataset.page); },
   openSheet, closeSheet,
   logout: async () => {
+    closeSheet();
     if (hasUnsavedInput() && !(await ask({ title: 'ログアウトしますか？', body: `保存していない入力内容があります（${unsavedScreens().join('・')}）。ログアウトすると消えます。`, okText: 'ログアウトする', danger: true }))) return;
     logout('');
   },
@@ -2009,12 +2054,12 @@ document.addEventListener('change', (e) => {
   if (t.classList.contains('slProd')) {
     const p = S.M.products.find((x) => String(x.id) === t.value);
     t.closest('.line').querySelector('.slPrice').value = p ? p.list_price : '';
-    updateLineAvail(t.closest('.line'));
+    updateLineAvail(t.closest('.line'), true);
   } else if (t.classList.contains('ruleChk')) {
     saveRule(t);
   } else if (t.id === 'shCustomer') {
     updateCustHint();
-    document.querySelectorAll('#shLines .line').forEach(updateLineAvail);
+    document.querySelectorAll('#shLines .line').forEach((l) => updateLineAvail(l, true));
   } else if (t.id === 'rcProduct') {
     fillReceiptLocations(); autoExpiry();
   } else if (t.id === 'rcMfg') {
@@ -2031,7 +2076,7 @@ document.addEventListener('input', (e) => {
   if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && String(e.target.value || '').trim()) e.target.removeAttribute('aria-invalid');
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();
-  if (e.target.classList.contains('slQty')) updateLineAvail(e.target.closest('.line'));
+  if (e.target.classList.contains('slQty')) updateLineAvail(e.target.closest('.line'), true);
   if (e.target.classList.contains('insReason')) updateInspectAction(e.target.dataset.id);
 });
 
