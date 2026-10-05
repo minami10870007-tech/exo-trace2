@@ -502,17 +502,18 @@ for (const vp of VIEWPORTS) {
     await page.route('**/rpc/create_shipment', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
     try {
       await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /登録できたか確認できませんでした/);
-      await page.fill('#shNote', 'DUP-SHIP-TEST（修正）'); // 確認できないまま内容を変えても、二重に出荷しない
+      await page.fill('#shNote', 'DUP-SHIP-TEST（修正）'); // 確認できないまま内容を変えて確定：前回分は登録済みと知らせ、いまの内容は登録しない
       await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk');
-      await page.waitForFunction(() => /出荷を確定しました/.test(document.getElementById('shDone').textContent), null, { timeout: 15000 })
-        .catch(async () => { throw new Error('再送できない: ' + (await page.textContent('#shMsg'))); });
+      await waitText('#shMsg', /登録済みでした/);
+      if ((await page.inputValue('#shNote')) !== 'DUP-SHIP-TEST（修正）') throw new Error('入力中の内容が消えた');
     } finally { await page.unroute('**/rpc/create_shipment'); globalThis.EXPECT_NET_ERR = false; }
-    if (!/前回の操作は登録されていました/.test(await page.textContent('#toasts'))) throw new Error('変更が反映されていないことを伝えない');
     const n = psql(server.sb.db, "select count(*) from exo.t_shipment where note like 'DUP-SHIP-TEST%'");
     if (n !== '1') throw new Error('出荷が ' + n + ' 件登録された');
-    // 後のテストのため取り消して在庫を戻す
-    const no = await page.getAttribute('#shDone [data-no]', 'data-no');
-    await page.click(`#shRecent [data-action="cancelShip"][data-no="${no}"]`); await page.fill('#dialogInput', 'テスト取消').catch(() => {}); await page.click('#dialogOk'); await idle(page);
+    // 後のテストのため、登録された出荷を取り消して在庫を戻し、入力を片付ける
+    const no = psql(server.sb.db, "select shipment_no from exo.t_shipment where note like 'DUP-SHIP-TEST%'");
+    await page.evaluate(() => loadShipmentPage());
+    await page.click(`#shRecent [data-action="cancelShip"][data-no="${no}"]`); await page.fill('#dialogInput', 'テスト取消'); await page.click('#dialogOk'); await idle(page);
+    await page.fill('.slQty', ''); await page.fill('#shNote', ''); await page.evaluate(() => alertBox('shMsg', ''));
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
   await step('マスタ保存の応答が届かないまま閉じても、保存されていたかを伝える', async () => {

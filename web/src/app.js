@@ -180,8 +180,9 @@ function newId() {
 S.req = {};
 S.unsure = {}; // 登録できたか分からないまま終わったフォーム（再送は画面側のチェックを省いてサーバーに任せる）
 S.changed = {}; // その間に内容を変えたフォーム
+S.checked = {}; // 「登録されていない」と確かめ済み（画面に戻るたびに同じ案内を繰り返さない）
 /** フォームの内容が変わったら、次の確定は新しい依頼として送る */
-function resetRequest(formId) { delete S.req[formId]; delete S.unsure[formId]; delete S.changed[formId]; }
+function resetRequest(formId) { delete S.req[formId]; delete S.unsure[formId]; delete S.changed[formId]; delete S.checked[formId]; }
 /** 入力した欄が属するフォーム・回収対象・検品カードの依頼番号を捨てる */
 function resetScopeOf(el) {
   if (!el || !el.closest) return;
@@ -217,8 +218,11 @@ async function api(fn, ...args) {
     if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
     if (!res.ok) throw rpcError(res, data);
     if (form && data && data.__unreadable) throw new Error(MSG_OFFLINE); // 応答の途中で切れた：登録できたか分からない
-    if (form && data && data._replayed && S.changed[form]) { // 前回の操作が登録されていた：その後に変えた内容は反映していない
-      toast('前回の操作は登録されていました（その後に変更した内容は反映されていません。必要なら、あらためて変更してください）。', 'warn');
+    if (form && data && data._replayed && S.changed[form]) {
+      // 前回送った内容が登録済みだった。いま画面にある（変更後の）内容は登録していないので、成功扱いにせず、そのまま残して知らせる
+      resetRequest(form); // 次の確定は、いまの内容の新しい依頼として送る
+      const no = data.shipment_no || data.receiptNo || data.returnNo || data.recall_no || data.lot_no || data.lotNo || '';
+      throw Object.assign(new Error(`前回送った内容${no ? `（${no}）` : ''}は登録済みでした。いま入力中の内容は、まだ登録されていません。内容を確認して、もう一度同じ操作をしてください。`), { replayedOther: true, result: data });
     }
     if (form) resetRequest(form); // 登録できた：次は新しい依頼
     return data;
@@ -362,7 +366,7 @@ function toast(text, kind, action) {
     el.appendChild(b);
   }
   $('toasts').appendChild(el);
-  setTimeout(() => el.remove(), action ? 7000 : kind === 'ng' ? 6000 : 3500);
+  setTimeout(() => el.remove(), action || kind === 'warn' ? 7000 : kind === 'ng' ? 6000 : 3500); // 注意は読み切れるよう長めに
 }
 
 /** ボタンを処理中表示にして二重送信を防ぐ */
@@ -564,6 +568,8 @@ function restoreDialog(d) {
 /** 前の利用者の入力内容・表示結果を消す（共用端末で別の人がログインする場合に備える） */
 function clearScreens() {
   S.pageHash = {};
+  // 登録待ちの状態は利用者ごと：ログアウトしたら捨てる（共用端末で次の人に持ち越さない）
+  S.req = {}; S.unsure = {}; S.changed = {}; S.checked = {}; S.masterSent = null; S.cancelReason = {};
   try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
   document.querySelectorAll('#app form').forEach((f) => f.reset());
   ['dashKpis', 'dashBody', 'shDone', 'invMsg', 'tcMsg', 'rtFindMsg', 'rtRecent', 'tlRecent', 'rcMsg', 'insMsg', 'insBody', 'shLines', 'shMsg', 'shRecent', 'rtShipment', 'rtMsg', 'invBody', 'tlBody', 'tcBody',
@@ -1899,6 +1905,13 @@ async function openDispose(btn) {
 }
 
 /** 記録できたか分からないまま処分ダイアログを閉じた：在庫の数量を見比べて、記録できていたかを伝える */
+/** 確かめられなかった保存・処分を確かめ直す（通信が戻った・画面に戻ってきたとき。ダイアログが閉じている場合だけ） */
+function recheckUnsure() {
+  if (!S.sess) return;
+  if (S.unsure.masterForm && !S.checked.masterForm && S.masterSent && !$('masterDialog').open) checkUnsureMaster();
+  if (S.unsure.disposeForm && !S.checked.disposeForm && !$('disposeDialog').open && $('disposeForm').dataset.stockAtSend) checkUnsureDispose();
+}
+
 async function checkUnsureDispose() {
   const f = $('disposeForm');
   const say = (text, kind) => { if ($('page-inventory').hidden) toast(text, kind); else alertBox('invMsg', text, kind); };
@@ -1912,6 +1925,7 @@ async function checkUnsureDispose() {
     resetRequest('disposeForm');
     say(`ロット ${f.dataset.lot} の処分は記録されていました（在庫 ${fmt(before)} → ${fmt(after)}）。`, 'ok');
   } else {
+    S.checked.disposeForm = true;
     say(`ロット ${f.dataset.lot} の処分は記録されていません（在庫 ${fmt(after)}）。もう一度「処分」から記録してください（同じ内容で開きます）。`, 'warn');
   }
 }
@@ -2007,7 +2021,7 @@ async function searchLot(e, fromUrl) {
           <h3 class="section-title">ステータス履歴</h3>
           <ul class="timeline">${l.history.map((h) => `<li><b>${esc(code('lot_status', h.from_status) || '登録')} → ${esc(code('lot_status', h.to_status))}</b>　${esc(h.reason)}
             <div class="s">${esc(h.changed_at)}・${esc(h.changed_by)}</div></li>`).join('')}</ul>${fold ? '</details>' : ''}</article>`;
-      }).join('') : `<div class="card">${empty('該当するロットはありません', 'search')}</div>`);
+      }).join('') : `<div class="card">${empty('該当するロットはありません', 'search')}<p class="note center">社内ロット番号・仕入先ロット番号（またはその一部）で探してください。商品名からは「在庫照会」で探せます。</p></div>`);
       focusTo($('tlBody').querySelector('.result-count') || $('tlBody').firstElementChild);
     } catch (err) {
       $('tlBody').innerHTML = `<div class="alert alert-ng" role="alert">${esc(err.message)}</div>`;
@@ -2360,6 +2374,7 @@ async function checkUnsureMaster() {
     const row = $('msList').querySelector(`[data-action="editMaster"][data-id="${CSS.escape(String(r.id))}"]`);
     if (row) { row.scrollIntoView({ block: 'nearest' }); focusTo(row); }
   } else { // 保存されていない：入力内容は残してあるので、開き直せばそのまま保存できる
+    S.checked.masterForm = true;
     toast(`${MASTER[m.t].label}「${m.code}」は保存されていません。もう一度${m.id ? '開いて' : '「新規登録」から'}保存してください（入力した内容のまま開きます）。`, 'warn');
   }
 }
@@ -2631,7 +2646,7 @@ const ACTIONS = {
   addLine, removeLine: (el) => {
     const line = el.closest('.line'), prev = line.previousElementSibling;
     line.remove();
-    resetRequest('shipForm'); // 明細が変わったので、次の確定は新しい依頼
+    if (S.unsure.shipForm) S.changed.shipForm = true; else resetRequest('shipForm'); // 明細が変わった（確認待ちの間は同じ依頼のまま）
     if (!$('shLines').children.length) { addLine(true); $('shLines').firstElementChild.dataset.cleared = '1'; } // 自分で消したので、自動では選び直さない
     // 削除したあとのフォーカス：前の明細の商品、無ければ最初の明細の商品
     (prev || $('shLines').firstElementChild).querySelector('.slProd').focus();
@@ -2791,12 +2806,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!S.sess || $('app').hidden) return;
     if (hasUnsavedInput()) { e.preventDefault(); e.returnValue = ''; }
   });
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshToday(); });
-  window.addEventListener('focus', refreshToday);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refreshToday(); recheckUnsure(); } });
+  window.addEventListener('focus', () => { refreshToday(); recheckUnsure(); });
   window.addEventListener('online', () => {
-    // 確かめられなかった保存・処分を、通信が戻ったら確かめる（ダイアログが閉じているとき）
-    if (S.unsure.masterForm && !$('masterDialog').open) checkUnsureMaster();
-    if (S.unsure.disposeForm && !$('disposeDialog').open) checkUnsureDispose();
+    recheckUnsure();
     if (!$('retryBtn').hidden) retry($('retryBtn'));
   });
   // 別のタブでのログアウト・トークン更新を反映する
