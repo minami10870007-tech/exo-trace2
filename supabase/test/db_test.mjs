@@ -73,9 +73,11 @@ try {
   await throwsMsg(G.save_master({ table: 'm_product', data: { product_code: 'X1', name: 'x', storage_class: 'M80', shelf_life_days: 'abc', regulatory_class: 'OTHER' } }), /有効期間/, '数値でない入力');
   await throwsMsg(G.save_master({ table: 't_lot', data: {} }), /更新できないテーブル/, 'マスタ以外は更新不可');
   await throwsMsg(G.save_master({ table: 'm_location', data: { location_code: 'L9', name: 'x', storage_class: 'RT', temp_min: '', temp_max: 25 } }), /下限 < 上限/, '保管場所の温度範囲');
-  ok(prod.list_price === 30000 && prod.min_remaining_days === 90 && prod.is_active === true && !('created_at' in prod), 'マスタの戻り値');
+  ok(prod.list_price === 30000 && prod.min_remaining_days === 90 && prod.is_active === true && !('created_at' in prod) && prod.updated_at, 'マスタの戻り値');
   const prodEdited = await G.save_master({ table: 'm_product', data: { ...prod, name: 'エクソソーム原液A（改）', list_price: '' } });
   ok(prodEdited.id === prod.id && prodEdited.name === 'エクソソーム原液A（改）' && prodEdited.list_price === null, 'マスタ更新（空欄は未設定）');
+  await throwsMsg(G.save_master({ table: 'm_product', data: { ...prod, expected_updated_at: prod.updated_at } }), /他の利用者が先に更新/, '古い編集画面からの上書きは拒否');
+  ok((await G.save_master({ table: 'm_product', data: { ...prodEdited, name: 'エクソソーム原液A（改2）', expected_updated_at: prodEdited.updated_at } })).name === 'エクソソーム原液A（改2）', '最新の編集画面からは保存できる');
   await G.save_master({ table: 'm_product', data: { ...prod } });
   ok((await G.save_sales_rule({ regulatoryClass: 'OTHER', customerType: 'SALON', allowed: false })) === true, '販売可否ルール保存');
   await throwsMsg(G.save_sales_rule({ regulatoryClass: 'BAD', customerType: 'SALON', allowed: true }), /不正/, '販売可否ルールの区分チェック');

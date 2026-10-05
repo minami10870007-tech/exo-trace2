@@ -743,10 +743,10 @@ language plpgsql stable security definer set search_path = '' as $$
 begin
   perform exo.require_user();
   return jsonb_build_object(
-    'suppliers', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' - 'updated_at' order by x.id) from exo.m_supplier x), '[]'),
-    'products', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' - 'updated_at' order by x.id) from exo.m_product x), '[]'),
-    'customers', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' - 'updated_at' order by x.id) from exo.m_customer x), '[]'),
-    'locations', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' - 'updated_at' order by x.id) from exo.m_location x), '[]'),
+    'suppliers', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' || jsonb_build_object('updated_at', x.updated_at::text) order by x.id) from exo.m_supplier x), '[]'),
+    'products', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' || jsonb_build_object('updated_at', x.updated_at::text) order by x.id) from exo.m_product x), '[]'),
+    'customers', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' || jsonb_build_object('updated_at', x.updated_at::text) order by x.id) from exo.m_customer x), '[]'),
+    'locations', coalesce((select jsonb_agg(to_jsonb(x) - 'created_at' || jsonb_build_object('updated_at', x.updated_at::text) order by x.id) from exo.m_location x), '[]'),
     'salesRules', coalesce((select jsonb_agg(to_jsonb(x) - 'updated_at' order by x.id) from exo.m_sales_rule x), '[]'));
 end $$;
 
@@ -851,6 +851,7 @@ declare
   v_n1 numeric; v_n2 numeric; v_n3 numeric; v_n4 numeric;
   v_type text; v_class text; v_reg text;
   v_has_stock boolean;
+  v_ver text;
   v_row jsonb;
 begin
   perform exo.require_user();
@@ -862,6 +863,13 @@ begin
   if exo.j_text(d, 'id') is not null then
     v_id := exo.j_id(d, 'id');
     if v_id is null then perform exo.fail('データが見つかりません。画面を再読込してください。'); end if;
+  end if;
+  -- 編集画面を開いた後に他の利用者が更新していたら、古い内容で上書きしない
+  if v_id is not null and exo.j_text(d, 'expected_updated_at') is not null then
+    execute format('select updated_at::text from exo.%I where id = $1', v_table) into v_ver using v_id;  -- v_table は上で許可済みの4つのみ
+    if v_ver is distinct from exo.j_text(d, 'expected_updated_at') then
+      perform exo.fail('このデータは他の利用者が先に更新しています。最新の内容を確認してください。入力した内容のままもう一度「保存」すると、上書きします。');
+    end if;
   end if;
   if v_code is null or v_name is null then perform exo.fail('コードと名称は必須です。'); end if;
   if v_code !~ '^[A-Za-z0-9-]+$' then perform exo.fail('コードは英数字とハイフンのみ使用できます。'); end if;
@@ -967,7 +975,8 @@ begin
   end if;
 
   if v_row is null then perform exo.fail('データが見つかりません。画面を再読込してください。'); end if;
-  return v_row - 'created_at' - 'updated_at';
+  execute format('select updated_at::text from exo.%I where id = $1', v_table) into v_ver using (v_row ->> 'id')::bigint;
+  return v_row - 'created_at' || jsonb_build_object('updated_at', v_ver);
 end $$;
 
 /** p = { regulatoryClass, customerType, allowed } */

@@ -832,3 +832,8 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 
 /* ---------- UX round 11 ---------- */
 .lot-action select.insTo { min-width: 10em; }
+
+/* ---------- UX round 12 ---------- */
+.ship-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.alert-note { margin-top: 6px; font-weight: 700; }
+#rclMsg .alert { margin: 0 0 12px; }

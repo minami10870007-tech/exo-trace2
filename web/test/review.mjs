@@ -299,7 +299,7 @@ for (const vp of VIEWPORTS) {
   await step('返品：出荷番号が空なら案内・最近の出荷から選べる', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
     await page.click('#rtSearch button[type="submit"]');
-    if (!(await page.isVisible('#rtFindMsg .alert'))) throw new Error('案内が見えない');
+    await page.waitForSelector('#rtFindMsg .alert', { timeout: 10000 }).catch(() => { throw new Error('案内が見えない'); });
     await page.click('#rtRecent [data-action="pickReturnShipment"]'); await idle(page);
     if (!(await page.$('#rtShipment [data-action="selectReturnLine"]'))) throw new Error('出荷が表示されない');
   });
@@ -383,16 +383,28 @@ for (const vp of VIEWPORTS) {
     if (Number(psql(server.sb.db, 'select count(*) from exo.t_shipment')) !== n) throw new Error('出荷が登録された');
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page); await page.fill('.slQty', ''); // 後のテストの再読み込みで「離れますか？」を出さないため
   });
-  await step('出荷：サーバーのエラーは消えずに残り、原因の欄に印が付く', async () => {
+  await step('出荷：日付の範囲は確定前に止め、サーバーのエラーは消えずに残る', async () => {
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
     await page.selectOption('#shCustomer', { index: 1 }); await page.selectOption('.slProd', { index: 1 }); await page.fill('.slQty', '1');
     if (!(await page.inputValue('.slPrice'))) await page.fill('.slPrice', '1000');
     await page.fill('#shDate', '2030-01-01');
-    await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /出荷日/);
-    await page.waitForTimeout(1500);
-    if (!/出荷日/.test(await page.textContent('#shMsg'))) throw new Error('エラーが消えた');
+    await page.click('#shipForm button[type="submit"]');
+    if (await page.$('#dialog[open]')) throw new Error('範囲外の日付で確認ダイアログが開いた');
     if ((await page.getAttribute('#shDate', 'aria-invalid')) !== 'true') throw new Error('出荷日に印がない');
-    await page.fill('#shDate', await page.evaluate(() => S.cfg.today)); await page.fill('.slQty', ''); await page.fill('#shNote', '');
+    await page.fill('#shDate', await page.evaluate(() => S.cfg.today));
+    // 他の利用者が先に出荷して在庫が無くなった状態を作る（確定の直前に在庫を0にし、あとで戻す）
+    const rows = psql(server.sb.db, "select id || ':' || on_hand_qty from exo.t_inventory where on_hand_qty > 0").split('\n');
+    psql(server.sb.db, 'update exo.t_inventory set on_hand_qty = 0');
+    try {
+      await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /不足/);
+      await page.waitForTimeout(1500);
+      if (!/不足/.test(await page.textContent('#shMsg'))) throw new Error('サーバーのエラーが消えた');
+      if ((await page.getAttribute('#shDate', 'aria-invalid')) === 'true') throw new Error('正しい出荷日に印が付いた');
+      if ((await page.getAttribute('.slQty', 'aria-invalid')) !== 'true') throw new Error('数量に印がない');
+    } finally {
+      for (const r of rows) { const [id, q] = r.split(':'); psql(server.sb.db, `update exo.t_inventory set on_hand_qty = ${q} where id = ${id}`); }
+    }
+    await page.fill('.slQty', ''); await page.fill('#shNote', '');
   });
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
@@ -404,6 +416,15 @@ for (const vp of VIEWPORTS) {
     if (await page.isHidden('#rtForm')) throw new Error('フォームが消えた');
     if (!/1〜/.test(await page.textContent('#rtMsg'))) throw new Error(await page.textContent('#rtMsg'));
     await page.click('[data-action="cancelReturn"]'); await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
+  });
+  await step('回収管理を見ただけでは「未保存の入力」と判定しない', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
+    if (await page.evaluate(() => hasUnsavedInput())) throw new Error('見ただけで未保存と判定: ' + (await page.evaluate(() => unsavedScreens().join())));
+  });
+  await step('返品：表示中の出荷から「別の出荷を選ぶ」で一覧に戻れる', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
+    if (await page.$('#rtShipment [data-action="newReturn"]')) { await page.click('#rtShipment [data-action="newReturn"]'); await idle(page); }
+    if (!(await page.$('#rtRecent [data-action="pickReturnShipment"]'))) throw new Error('最近の出荷が出ない');
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
