@@ -874,3 +874,9 @@ select { max-width: 100%; }
 .target-head > div { min-width: 0; }
 .target-head .mono { overflow-wrap: anywhere; }
 .form-actions .btn { white-space: normal; max-width: 100%; }
+
+/* ---- UX round 62：全画面のダイアログ内で、下に固定した保存ボタンにメッセージが隠れないように ---- */
+@media (max-width: 767.98px) {
+  .dialog-lg, .dialog-lg form { scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  #masterMsg, #dpMsg { scroll-margin-bottom: 96px; }
+}

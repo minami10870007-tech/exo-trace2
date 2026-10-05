@@ -1248,6 +1248,11 @@ async function submitReceipt(e) {
     $(probs[0][0]).focus({ preventScroll: true });
     return;
   }
+  // 入荷は登録後に取り消せないので、桁の打ち間違いが疑われる数量は登録前に確かめる
+  if (q >= 1000 && !resending('receiptForm') && !(await ask({ title: '入荷数量を確認してください', body: `入荷数量 ${fmt(q)}（仕入金額 ${fmt(q * Number($('rcPrice').value || 0))} 円）で登録します。\n入荷は登録後に取り消せません。数量に誤りがないか確認してください。`, okText: 'このまま登録する' }))) {
+    $('rcQty').focus();
+    return;
+  }
   // 入荷した時点で出荷できない使用期限（年の打ち間違いなど）は、登録前に確かめる
   const pr = S.M.products.find((x) => String(x.id) === $('rcProduct').value);
   const left = exp ? Math.round((new Date(exp + 'T00:00:00Z') - new Date(S.cfg.today + 'T00:00:00Z')) / 86400000) : null;
@@ -1640,7 +1645,7 @@ async function cancelShip(btn) {
       const row = $('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`);
       if (err.unsure && fresh && row && !row.querySelector('[data-action="cancelShip"]')) toast(`出荷 ${btn.dataset.no} の取消は完了していました`); // 通信は切れたが取消できていた
       else if (err.unsure && fresh && row) toast(`出荷 ${btn.dataset.no} を取消できませんでした（通信が途切れました）。もう一度「出荷を取消」を押してください。`, 'ng');
-      else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
+      else toast(err.message.replace(/[。]?$/, '。') + (fresh ? '最新の状態を表示しました。' : ''), 'ng');
       focusTo(row || $('shRecent'));
     }
   });
@@ -2271,7 +2276,7 @@ function renderRecall(r) {
         <div class="field-err span-all" id="${gid}_e" role="alert"></div></div>` : '';
     return `<div class="cust-group" id="${gid}"><div class="target-head"><div><div class="t">${esc(t0.customer)}${ts.length > 1 ? `<span class="card-sub">（対象ロット ${ts.length}）</span>` : ''}</div>
         <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div>
-        ${last ? `<div class="s">連絡 ${esc(last.contacted_on)}${last.contact_method ? '・' + esc(last.contact_method) : ''}</div>` : ''}</div>${badge(st[0], st[1])}</div>
+        ${last ? `<div class="s">連絡 ${esc(last.contacted_on)}${last.contact_method ? '\u00a0／ ' + esc(last.contact_method) : ''}</div>` : ''}</div>${badge(st[0], st[1])}</div>
       ${contactForm}${ts.map(lotBlock).join('')}</div>`;
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
@@ -2494,7 +2499,7 @@ function markMasterError(message) {
   const hit = MASTER_ERR_FIELD.find(([re]) => re.test(message));
   if (!hit) return;
   const el = hit[1] === '_code' ? $('masterFields').querySelector('input[id$="_code"]:not(#mf_medical_inst_code)') : $('mf_' + hit[1]);
-  if (el) { el.setAttribute('aria-invalid', 'true'); el.focus(); }
+  if (el) { fieldErr(el, userText(message)); el.focus(); } // 欄の下にも理由を出す（スマホでは下のメッセージ欄が見えないため）
 }
 
 /** マスタの必須項目（コード以外）と入力のヒント */
@@ -2595,7 +2600,8 @@ function editMaster(id) {
       const codes = S.cfg.codes[type.slice(5)];
       return `<div class="field">${lab}<select ${common}><option value="">選択してください</option>${Object.keys(codes).map((c) => `<option value="${c}"${c === v ? ' selected' : ''}>${esc(codes[c])}</option>`).join('')}</select>${hint}</div>`;
     }
-    const attrs = type === 'number' ? ' type="number" inputmode="decimal" step="any"' : type === 'email' ? ' type="email" inputmode="email"' : type === 'tel' ? ' type="tel" inputmode="tel"' : '';
+    const intField = ['shelf_life_days', 'min_remaining_days', 'reorder_point'].includes(k); // 整数の欄は小数点のないキーボードに
+    const attrs = type === 'number' ? (intField ? ' type="number" inputmode="numeric" step="1" min="0"' : ' type="number" inputmode="decimal" step="any"') : type === 'email' ? ' type="email" inputmode="email"' : type === 'tel' ? ' type="tel" inputmode="tel"' : '';
     return `<div class="field">${lab}<input ${common}${attrs}${isCode(k) ? ' autocapitalize="characters"' : ''} value="${esc(v)}" autocomplete="off">${hint}</div>`;
   }).join('');
   syncMedicalCode();
