@@ -130,6 +130,7 @@ try {
   await G.save_master({ table: 'm_product', data: { ...prod, min_remaining_days: 700 } });
   await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', lines: [{ productId: prod.id, quantity: 1 }] }), /残期間 700日以上/, '最低出荷残期間');
   await G.save_master({ table: 'm_product', data: { ...prod } });
+  await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-09-30', lines: [{ productId: prod.id, quantity: 1 }] }), /出荷日までに入荷・検品/, '出荷日より後に入荷したロットは引当しない');
   await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-05', lines: [{ productId: prod.id, quantity: 1 }] }), /当日以前/, '未来日の出荷は不可');
   await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-07-05', lines: [{ productId: prod.id, quantity: 1 }] }), /過去90日以内/, '古すぎる出荷日は不可');
   await throwsMsg(G.create_shipment({ customerId: salonB.id, shippedOn: '2026-10-04', note: 'x'.repeat(2001), lines: [{ productId: prod.id, quantity: 1 }] }), /長すぎ/, '長すぎる入力');
@@ -180,6 +181,8 @@ try {
   let rv = (await G.list_recalls())[0];
   ok(rv.targets.find((t) => t.customer === 'サロンB').recovered_qty === 2 && rv.targets.find((t) => t.customer === 'サロンB').status === 'NOT_CONTACTED', '回収数を返品から集計');
   await throwsMsg(G.update_recall_target({ targetId: tB.id, unrecoverableQty: 2 }), /超えています/, '回収不能数の上限');
+  await throwsMsg(G.update_recall_target({ targetId: tB.id, contactedOn: '2026-09-01' }), /回収開始日以降/, '連絡日は回収開始日以降');
+  ok((await G.get_shipment_by_no({ no: s2.shipment_no })).lines.every((l) => l.in_open_recall === true && l.storage_class === 'M80'), '返品画面用：回収中フラグ・温度区分');
   await G.update_recall_target({ targetId: tB.id, contactedOn: '2026-10-04', contactMethod: '電話', status: 'CONTACTED', unrecoverableQty: 1, closeReason: '' });
   rv = (await G.list_recalls())[0];
   const tB2 = rv.targets.find((t) => t.customer === 'サロンB');

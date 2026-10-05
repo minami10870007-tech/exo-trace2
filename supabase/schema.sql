@@ -538,6 +538,7 @@ language sql stable set search_path = '' as $$
     select sl.id, jsonb_build_object(
         'id', sl.id, 'product', p.name, 'lot_no', l.lot_no, 'expires_on', l.expires_on,
         'lot_status', exo.code_label('lot_status', l.status), 'lot_status_code', l.status,
+        'storage_class', p.storage_class, 'in_open_recall', exists (select 1 from exo.open_recall_ids(l.id)),
         'quantity', sl.quantity, 'unit_price', sl.unit_price, 'returned', exo.returned_qty(sl.id),
         'returnable', case when sl.status = 'SHIPPED' then sl.quantity - exo.returned_qty(sl.id) else 0 end,
         'status', sl.status) as j,
@@ -1177,6 +1178,7 @@ begin
       join exo.m_location loc on loc.id = i.location_id
       where l.product_id = v_product.id and l.status = 'RELEASED' and not loc.is_quarantine and i.on_hand_qty > 0
         and l.expires_on - exo.today() >= v_product.min_remaining_days  -- 残期間は当日基準（過去日付の出荷で期限切れ在庫を引き当てない）
+        and l.received_on <= v_shipped_on and least((l.inspected_at at time zone 'Asia/Tokyo')::date, exo.today()) <= v_shipped_on  -- 出荷日より後に入荷・検品したロットは使わない
       order by l.expires_on, l.received_on, loc.id, l.id
       for update of i
     loop
@@ -1191,13 +1193,13 @@ begin
     end loop;
     if v_remain > 0 then
       perform exo.fail('商品「' || v_product.name || '」の引当可能在庫が不足しています（不足 ' || v_remain || '）。' ||
-        '合格済・残期間 ' || v_product.min_remaining_days || '日以上・隔離保管場所以外の在庫のみ引当できます。');
+        '合格済・残期間 ' || v_product.min_remaining_days || '日以上・隔離保管場所以外で、出荷日までに入荷・検品した在庫のみ引当できます。');
     end if;
   end loop;
 
   insert into exo.t_shipment (shipment_no, customer_id, shipped_on, status, note, created_by)
   values (exo.next_no('SH', v_shipped_on, array(select shipment_no from exo.t_shipment)), v_customer.id, v_shipped_on, 'SHIPPED',
-    left(exo.j_text(p, 'note'), 1000), v_user)
+    exo.j_text(p, 'note'), v_user)
   returning id into v_shipment_id;
   for a in select x from jsonb_array_elements(v_plan) x loop
     insert into exo.t_shipment_line (shipment_id, product_id, lot_id, location_id, quantity, unit_price, unit_cost, status)
@@ -1496,8 +1498,9 @@ begin
   if v_recall_status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません。'); end if;
   if p ? 'contactedOn' then
     v_contacted := exo.to_date(exo.j_text(p, 'contactedOn'));
-    if exo.j_text(p, 'contactedOn') is not null and (v_contacted is null or v_contacted > exo.today()) then
-      perform exo.fail('連絡日が不正です（当日以前の日付を入力してください）。');
+    if exo.j_text(p, 'contactedOn') is not null and (v_contacted is null or v_contacted > exo.today()
+        or v_contacted < (select started_on from exo.t_recall where id = v_t.recall_id)) then
+      perform exo.fail('連絡日は回収開始日以降、当日以前の日付を入力してください。');
     end if;
     v_t.contacted_on := v_contacted;
   end if;

@@ -365,6 +365,7 @@ async function login(e) {
 async function boot() {
   try {
     S.cfg = await api('getConfig'); // 利用権限の確認を兼ねる（権限がなければログイン画面に戻る）
+    todayCheckedAt = Date.now();
   } catch (err) {
     // 通信障害など：セッションは残したまま、再接続できるようにする
     if (S.sess) showLogin(err.message, true);
@@ -386,6 +387,22 @@ async function boot() {
   } catch (err) {
     if (S.sess) toast(err.message, 'ng');
   }
+}
+
+/** 日付が変わっていたら、入力欄の既定の日付（当日）を新しい日付にする（端末を開いたまま翌日に使う場合） */
+let todayCheckedAt = 0;
+async function refreshToday() {
+  if (!S.sess || !S.cfg || $('app').hidden || Date.now() - todayCheckedAt < 5 * 60 * 1000) return;
+  todayCheckedAt = Date.now();
+  try {
+    const cfg = await api('getConfig');
+    const old = S.cfg.today;
+    if (cfg.today === old) return;
+    S.cfg.today = cfg.today;
+    ['rcDate', 'shDate', 'rtDate'].forEach((id) => { if ($(id).value === old) $(id).value = cfg.today; });
+    toast('日付が変わったため、入力欄の日付を ' + cfg.today + ' にしました');
+    if (S.page === 'dashboard') loadDashboard().catch(() => {});
+  } catch (e) { /* 次の機会に確認する */ }
 }
 
 /** 再接続（通信障害・設定の読み込み失敗からの復帰） */
@@ -788,7 +805,7 @@ async function findShipmentForReturn(e, keepMsg) {
       $('rtShipment').innerHTML = `<p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>` +
         table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
           s.lines.map((l) => ({ attrs: rowAlert(l.lot_status_code), cells: [html(esc(l.product)), html(mono(l.lot_no)), html(badge(l.lot_status_code, l.lot_status)), num(l.quantity), num(l.returned), num(l.returnable),
-            l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.lot_status_code === 'RECALLED' ? 1 : ''}">この明細を返品</button>`) : ''] })));
+            l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.in_open_recall ? 1 : ''}" data-storage="${esc(l.storage_class)}">この明細を返品</button>`) : ''] })));
     } catch (err) {
       $('rtShipment').innerHTML = '';
       alertBox('rtMsg', err.message, 'ng');
@@ -808,8 +825,14 @@ function selectReturnLine(btn) {
   $('rtQty').max = btn.dataset.max;
   $('rtQty').value = btn.dataset.max;
   $('rtDate').value = S.cfg.today;
-  $('rtQLoc').innerHTML = options(active(S.M.locations).filter((l) => String(l.is_quarantine) === 'true'), 'id', (l) => l.name, '選択してください');
-  $('rtRLoc').innerHTML = options(active(S.M.locations).filter((l) => String(l.is_quarantine) !== 'true'), 'id', (l) => l.name, '選択してください');
+  // 商品と同じ温度区分の保管場所だけを選べるようにする（1か所だけなら自動で選ぶ）
+  const locs = active(S.M.locations).filter((l) => l.storage_class === btn.dataset.storage);
+  const fill = (id, list) => {
+    $(id).innerHTML = options(list, 'id', (l) => l.name, list.length ? '選択してください' : '該当する保管場所がありません');
+    if (list.length === 1) $(id).value = list[0].id;
+  };
+  fill('rtQLoc', locs.filter((l) => String(l.is_quarantine) === 'true'));
+  fill('rtRLoc', locs.filter((l) => String(l.is_quarantine) !== 'true'));
   const recall = btn.dataset.recall === '1';
   $('rtDisp').value = recall ? 'DISPOSE' : '';
   $('rtDisp').disabled = recall;
@@ -954,7 +977,7 @@ function renderRecall(r) {
         <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}"></div>
         ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}"><option value="">変更しない</option><option value="CONTACTED">連絡済にする</option><option value="CLOSED">クローズする</option></select></div>` : ''}
-        <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" autocomplete="off"></div>
+        <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" autocomplete="off" maxlength="500"></div>
         <button type="button" class="btn btn-secondary span-save" data-action="saveTarget" data-id="${t.id}">保存</button>
       </div></details>` : (t.close_reason ? `<p class="note">クローズ理由：${esc(t.close_reason)}</p>` : '');
     return `<div class="target"><div class="target-head"><div><div class="t">${esc(t.customer)}</div>
@@ -1235,6 +1258,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (b) { S.masterTable = b.dataset.table; loadMaster().catch((err) => toast(err.message, 'ng')); }
   });
   window.addEventListener('hashchange', () => { if (S.sess && !$('app').hidden) route(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshToday(); });
+  window.addEventListener('focus', refreshToday);
   window.addEventListener('online', () => { if (!$('retryBtn').hidden) retry($('retryBtn')); });
   // 別のタブでのログアウト・トークン更新を反映する
   window.addEventListener('storage', (e) => {
