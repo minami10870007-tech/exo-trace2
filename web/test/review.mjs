@@ -583,6 +583,18 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(() => { location.hash = '#/dashboard'; }); await idle(page);
     }
   });
+  await step('回収：顧客ごとの「連絡を記録」の入力途中の内容は、描き直しても消えない', async () => {
+    await page.evaluate(() => { location.hash = '#/recall'; }); await idle(page);
+    const sel = await page.$('#rclList .contact-form select');
+    if (!sel) return; // 連絡を記録できる顧客がいないデータでは確認しない
+    const id = await sel.getAttribute('id');
+    const cur = await sel.inputValue(); const v = cur === '訪問' ? 'メール' : '訪問';
+    await page.selectOption('#' + id, v);
+    if (!(await page.evaluate(() => unsavedScreens().includes('回収管理')))) throw new Error('入力途中と判定されない');
+    await page.evaluate(() => loadRecalls()); await idle(page);
+    if ((await page.inputValue('#' + id)) !== v) throw new Error('描き直したら入力が消えた');
+    await page.selectOption('#' + id, cur);
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);

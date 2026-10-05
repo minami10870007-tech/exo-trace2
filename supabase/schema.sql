@@ -1751,7 +1751,7 @@ begin
   if v_r.status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません（他の利用者が完了した可能性があります）。'); end if;
   if v_on is null then perform exo.fail('連絡日を入力してください。'); end if;
   if v_on > exo.today() or v_on < v_r.started_on then perform exo.fail('連絡日は回収開始日以降、当日以前の日付を入力してください。'); end if;
-  update exo.t_recall_target set contacted_on = v_on,
+  update exo.t_recall_target set contacted_on = greatest(contacted_on, v_on), -- 最終連絡日は前に戻さない
       contact_method = coalesce(left(exo.j_text(p, 'contactMethod'), 50), contact_method),
       status = case when status = 'NOT_CONTACTED' then 'CONTACTED' else status end, updated_at = now()
   where recall_id = v_r.id and customer_id = exo.j_id(p, 'customerId') and status not in ('RECOVERED', 'CLOSED');

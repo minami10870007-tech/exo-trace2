@@ -1597,7 +1597,7 @@ async function loadRecentShipments() {
 }
 
 async function cancelShip(btn) {
-  if (btn.dataset.recall && !(await ask({ title: '回収中のロットを含む出荷です', body: `出荷 ${btn.dataset.no} には回収中のロットが含まれます。取消すと、この顧客は回収対象から外れます。\n商品が顧客に届いている場合は、取消ではなく「返品登録」で回収品として受け入れてください。`, okText: '誤出荷なので取消す', danger: true }))) return;
+  if (btn.dataset.recall && !(await ask({ title: '回収中のロットを含む出荷です', body: `出荷 ${btn.dataset.no} には回収中のロットが含まれます。取消すと、この出荷分は回収対象から外れます。\n商品が顧客に届いている場合は、取消ではなく「返品登録」で回収品として受け入れてください。`, okText: '誤出荷なので取消す', danger: true }))) return;
   const reason = await ask({ title: `出荷 ${btn.dataset.no} を取消しますか？`, body: '在庫に戻ります。返品が登録されている出荷は取消できません。', input: '取消理由', value: (S.cancelReason || {})[btn.dataset.no] || '', okText: '取消する', danger: true });
   if (reason) (S.cancelReason = S.cancelReason || {})[btn.dataset.no] = reason; // 通信が途切れてやり直すとき、理由を打ち直さずに済むように
   if (!reason) return;
@@ -2240,11 +2240,13 @@ function renderRecall(r) {
     const t0 = ts[0], openTs = ts.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED');
     const contacts = [t0.contact_name ? esc(t0.contact_name) : '', telLink(t0.phone), mailLink(t0.email)].filter(Boolean);
     const last = ts.filter((t) => t.contacted_on).sort((a, b) => String(b.contacted_on).localeCompare(String(a.contacted_on)))[0];
-    const st = !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
+    const st = !openTs.length && ts.every((t) => Number(t.shipped_qty) === 0) ? ['CLOSED', '対象外'] : !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
     const gid = `cg_${r.id}_${t0.customer_id}`;
-    const contactForm = ed && openTs.length ? `<div class="contact-form"><div class="field f-date"><label for="${gid}_d">連絡日</label><input type="date" id="${gid}_d" value="${esc(last ? last.contacted_on : '')}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
-        <div class="field"><label for="${gid}_m">連絡方法</label><select id="${gid}_m">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${last && m === last.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
-        <button type="button" class="btn btn-primary" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}">連絡を記録</button>
+    const d0 = last ? last.contacted_on : S.cfg.today; // まだ連絡していなければ、今日の日付を入れておく（その日に記録することが多いため）
+    const m0 = last ? last.contact_method || '' : '';
+    const contactForm = ed && openTs.length ? `<div class="contact-form"><div class="field f-date"><label for="${gid}_d">連絡日</label><input type="date" id="${gid}_d" value="${esc(d0)}" data-orig="${esc(d0)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}" aria-describedby="${gid}_e"></div>
+        <div class="field"><label for="${gid}_m">連絡方法</label><select id="${gid}_m" data-orig="${esc(m0)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === m0 ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
+        <button type="button" class="btn ${last ? 'btn-secondary' : 'btn-primary'}" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}">${last ? '再度連絡を記録' : '連絡を記録'}</button>
         <div class="field-err span-all" id="${gid}_e" role="alert"></div></div>` : '';
     return `<div class="cust-group" id="${gid}"><div class="target-head"><div><div class="t">${esc(t0.customer)}${ts.length > 1 ? `<span class="card-sub">（対象ロット ${ts.length}）</span>` : ''}</div>
         <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div>
@@ -2311,10 +2313,18 @@ function snapshotTargetForms(exceptId) {
     // 入力を始めたときの版（ver）も控える：描き直しで新しい版に置き換わると、他の人の更新を上書きできてしまうため
     if (fields.length || (d.open && !d.querySelector('[id$="_' + exceptId + '"]'))) snap.push({ id: save.dataset.id, open: d.open, fields, ver: save.dataset.ver });
   });
+  // 顧客ごとの「連絡を記録」欄も、入力途中なら控える（記録したばかりの顧客は除く）
+  $('rclList').querySelectorAll('.cust-group .contact-form').forEach((f) => {
+    const gid = f.closest('.cust-group').id;
+    if (gid === exceptId) return;
+    const fields = [...f.querySelectorAll('input, select')].filter((el) => el.value !== (el.dataset.orig || '')).map((el) => [el.id, el.value]);
+    if (fields.length) snap.push({ cg: gid, fields });
+  });
   return snap;
 }
 function restoreTargetForms(snap) {
   snap.forEach((t) => {
+    if (t.cg) { t.fields.forEach(([id, v]) => { if ($(id)) $(id).value = v; }); return; }
     const btn = $('rclList').querySelector(`[data-action="saveTarget"][data-id="${t.id}"]`);
     if (!btn) return;
     btn.closest('details').open = t.open || t.fields.length > 0;
@@ -2746,19 +2756,24 @@ const ACTIONS = {
   },
   saveContact: async (el) => {
     const gid = `cg_${el.dataset.recall}_${el.dataset.customer}`, d = $(gid + '_d');
-    $(gid + '_e').textContent = '';
+    $(gid + '_e').textContent = ''; d.removeAttribute('aria-invalid');
     if (!d.value) { d.setAttribute('aria-invalid', 'true'); $(gid + '_e').textContent = '連絡日を入力してください。'; d.focus(); return; }
     await busy(el, async () => {
       try {
         await api('recordRecallContact', { recallId: el.dataset.recall, customerId: el.dataset.customer, contactedOn: d.value, contactMethod: $(gid + '_m').value });
         const who = $(gid).querySelector('.t').firstChild.textContent;
+        $('toasts').innerHTML = '';
         toast(`「${who}」への連絡を記録しました`);
-        await loadRecalls();
+        await loadRecalls(gid); // 他の顧客の入力途中の内容は残す
         focusTo($(gid) || $('rclList'));
       } catch (err) {
-        if (!$(gid + '_e')) { toast(err.message, 'ng'); return; }
-        $(gid + '_e').textContent = err.message;
-        if (/連絡日/.test(err.message)) { d.setAttribute('aria-invalid', 'true'); d.focus(); }
+        if (/連絡日/.test(err.message) && $(gid + '_e')) { $(gid + '_e').textContent = err.message; d.setAttribute('aria-invalid', 'true'); d.focus(); return; }
+        // 他の利用者の操作で状態が変わった：最新の状態を表示してから知らせる（入力途中の内容は残す）
+        if (!S.sess) return;
+        const fresh = await loadRecalls().then(() => true, () => false);
+        const text = err.message + (fresh ? '\n最新の状態を表示しました。' : '');
+        if ($(gid + '_e')) { $(gid + '_e').textContent = text; focusTo($(gid)); }
+        else { alertBox('rclMsg', text, 'ng', true); focusTo($(gid) || $('rclList').querySelector(`article[data-id="${CSS.escape(el.dataset.recall)}"]`) || $('rclMsg')); }
       }
     });
   },
