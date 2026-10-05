@@ -42,7 +42,7 @@ const nw = (v) => `<span class="nowrap">${esc(v)}</span>`;
 const telLink = (v) => (v ? `<a href="tel:${esc(String(v).split(/\s*[（(]?\s*(?:内線|ext\.?|#)/i)[0].replace(/[^0-9+]/g, ''))}">${esc(v)}</a>` : '');
 const mailLink = (v) => (v ? `<a href="mailto:${esc(v)}">${esc(v)}</a>` : '');
 // 区切り（・）は前の項目に付ける：折り返したとき、行頭に「・」が来ないように
-const joinNw = (arr, sep) => { const xs = arr.filter((v) => v !== '' && v !== null && v !== undefined); return xs.map((v, i) => nw(String(v) + (i < xs.length - 1 ? sep || '・' : ''))).join(''); };
+const joinNw = (arr, sep) => { const xs = arr.filter((v) => v !== '' && v !== null && v !== undefined); return xs.map((v, i) => nw(String(v) + (i < xs.length - 1 ? sep || ' ／ ' : ''))).join(''); }; // 名前の中の「・」と区別できる区切り
 
 function storage(read, value) {
   try {
@@ -794,7 +794,11 @@ function showPage(id) {
     done = (withMasters ? freshMasters().then(() => { if (id === 'receipt' || id === 'shipment') renderPrereq(); return loaders[id](); }) : loaders[id]()).then(() => {
       // 「戻る」で一覧に戻ったら、開いた行にフォーカスを戻す
       const bf = S.backFocus;
-      if (bf && bf.page === id) { S.backFocus = null; const row = document.querySelector('#page-' + id + ' ' + bf.sel); if (row) { row.focus(); row.scrollIntoView({ block: 'center' }); } }
+      if (bf && bf.page === id) {
+        S.backFocus = null;
+        const row = document.querySelector('#page-' + id + ' ' + bf.sel) || (bf.fallback && document.querySelector('#page-' + id + ' ' + bf.fallback)); // ボタンが消えていたら、その案件へ
+        if (row) { focusTo(row); row.scrollIntoView({ block: 'center' }); }
+      }
     }).catch((e) => toast(e.message, 'ng'));
   }
   if (id === 'receipt' || id === 'shipment') renderPrereq();
@@ -2254,11 +2258,11 @@ function renderRecall(r) {
     const last = ts.filter((t) => t.contacted_on).sort((a, b) => String(b.contacted_on).localeCompare(String(a.contacted_on)))[0];
     const st = !openTs.length && ts.every((t) => Number(t.shipped_qty) === 0) ? ['CLOSED', '対象外'] : !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
     const gid = `cg_${r.id}_${t0.customer_id}`;
-    const d0 = last ? last.contacted_on : S.cfg.today; // まだ連絡していなければ、今日の日付を入れておく（その日に記録することが多いため）
+    const d0 = S.cfg.today; // 連絡はその日に記録することが多いので、今日の日付を入れておく（前回の連絡日は見出しに表示）
     const m0 = last ? last.contact_method || '' : '';
     const contactForm = ed && openTs.length ? `<div class="contact-form"><div class="field f-date"><label for="${gid}_d">連絡日</label><input type="date" id="${gid}_d" value="${esc(d0)}" data-orig="${esc(d0)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}" aria-describedby="${gid}_e"></div>
         <div class="field"><label for="${gid}_m">連絡方法</label><select id="${gid}_m" data-orig="${esc(m0)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === m0 ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
-        <button type="button" class="btn ${last ? 'btn-secondary' : 'btn-primary'}" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}">${last ? '再度連絡を記録' : '連絡を記録'}</button>
+        <button type="button" class="btn ${last ? 'btn-secondary' : 'btn-primary'}" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}" data-last="${esc(last ? last.contacted_on : '')}">${last ? '再度連絡を記録' : '連絡を記録'}</button>
         <div class="field-err span-all" id="${gid}_e" role="alert"></div></div>` : '';
     return `<div class="cust-group" id="${gid}"><div class="target-head"><div><div class="t">${esc(t0.customer)}${ts.length > 1 ? `<span class="card-sub">（対象ロット ${ts.length}）</span>` : ''}</div>
         <div class="s contacts">${contacts.length ? contacts.map((c) => `<span class="contact">${c}</span>`).join('') : '連絡先未登録'}</div>
@@ -2758,7 +2762,7 @@ const ACTIONS = {
     S.invScope = el.dataset.lots || el.dataset.loc || el.dataset.prod
       ? { lots: el.dataset.lots ? el.dataset.lots.split(',') : null, loc: el.dataset.loc || null, prod: el.dataset.prod || null, label: el.dataset.label || '', recall: el.dataset.recall || null } : null;
     // 回収案件から来たときは、「戻る」でその案件のボタンに戻れるように
-    if (el.dataset.recall) S.backFocus = { page: 'recall', sel: `article[data-id="${CSS.escape(el.dataset.recall)}"] [data-action="goInv"]` };
+    if (el.dataset.recall) S.backFocus = { page: 'recall', sel: `article[data-id="${CSS.escape(el.dataset.recall)}"] [data-action="goInv"]`, fallback: `article[data-id="${CSS.escape(el.dataset.recall)}"]` };
     // アプリが案内したボタンなので、開いているマスタ編集は確認なしで閉じる
     if ($('masterDialog').open) { $('masterForm').dataset.dirty = ''; $('masterDialog').close('cancel'); }
     alertBox('invMsg', '');
@@ -2775,7 +2779,9 @@ const ACTIONS = {
         await api('recordRecallContact', { recallId: el.dataset.recall, customerId: el.dataset.customer, contactedOn: d.value, contactMethod: $(gid + '_m').value });
         const who = $(gid).querySelector('.t').firstChild.textContent;
         $('toasts').innerHTML = '';
-        toast(`「${who}」への連絡を記録しました`);
+        // 前回より前の日付は最終連絡日を変えない（方法などは記録する）。そのことを伝える
+        if (el.dataset.last && d.value < el.dataset.last) toast(`「${who}」への連絡を記録しました。最終連絡日は ${el.dataset.last} のままです（入力した ${d.value} は前回より前のため）。`, 'warn');
+        else toast(`「${who}」への連絡を記録しました`);
         await loadRecalls(gid); // 他の顧客の入力途中の内容は残す
         focusTo($(gid) || $('rclList'));
       } catch (err) {
