@@ -305,6 +305,7 @@ input::placeholder, textarea::placeholder { color: var(--text-2); opacity: .8; }
 .kpi.is-alert b { color: var(--danger); }
 .kpi.is-warn b { color: var(--warn); }
 .dash-grid { display: grid; gap: 16px; }
+.dash-grid > .alert { margin-top: 0; }
 .empty { text-align: center; color: var(--text-2); padding: 20px 12px; font-size: 14px; }
 .empty .ic { width: 28px; height: 28px; margin: 0 auto 6px; display: block; opacity: .6; }
 .list { list-style: none; margin: 0; padding: 0; }

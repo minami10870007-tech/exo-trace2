@@ -10,6 +10,8 @@
  *   - 納品先（顧客＝納品先として扱う）、ロール別権限（スプレッドシートの共有権限で管理）
  *   - 合格済ロットへの分納（新しい仕入先ロット番号で登録する）、温度記録、添付ファイル
  *
+ * スマホ対応の Web 版（Netlify＋Supabase）は supabase/schema.sql と web/ を参照（このスプレッドシート版とは別のデータを持つ）。
+ *
  * 使い方
  *   1. メニュー「EXO-TRACE」>「初期設定」を実行（シート作成）
  *   2. 「EXO-TRACE」>「画面を開く」で操作画面を表示
@@ -74,63 +76,12 @@ function onOpen() {
     .addItem('初期設定（シート作成）', 'setup')
     .addItem('日次チェックを今すぐ実行', 'dailyCheck')
     .addItem('日次チェックのトリガー設定（毎日1時）', 'installDailyTrigger')
-    .addItem('Netlify 連携シークレットの表示', 'setupApiSecret')
     .addToUi();
 }
 
 function openApp() {
   const html = HtmlService.createHtmlOutputFromFile('index').setWidth(1200).setHeight(800);
   SpreadsheetApp.getUi().showModelessDialog(html, 'EXO-TRACE エクソソーム仕入・販売トレーサビリティ');
-}
-
-// ============================================================================
-// Netlify 連携 API（ウェブアプリとしてデプロイ：実行ユーザー＝自分、アクセス＝全員）
-//   Netlify Function からのみ呼び出す。共有シークレット（スクリプトプロパティ API_SECRET）で認証し、
-//   ログインユーザーのメールアドレスを作成者として記録する。
-// ============================================================================
-
-/** API から呼び出せる関数（ここにない関数は実行できない） */
-const API_FUNCTIONS = {
-  getConfig: getConfig, getMasters: getMasters, getDashboard: getDashboard, getLots: getLots, getInventory: getInventory,
-  getRecentShipments: getRecentShipments, getShipmentByNo: getShipmentByNo, saveMaster: saveMaster, saveSalesRule: saveSalesRule,
-  registerReceipt: registerReceipt, changeLotStatus: changeLotStatus, createShipment: createShipment, cancelShipment: cancelShipment,
-  registerReturn: registerReturn, traceLot: traceLot, traceCustomer: traceCustomer, createRecall: createRecall, listRecalls: listRecalls,
-  reextractRecall: reextractRecall, updateRecallTarget: updateRecallTarget, closeRecall: closeRecall,
-};
-let API_USER_ = null;
-
-function doPost(e) {
-  let out;
-  try {
-    const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    const secret = PropertiesService.getScriptProperties().getProperty('API_SECRET');
-    if (!secret || typeof req.secret !== 'string' || req.secret !== secret) throw new Error('API認証に失敗しました。');
-    const fn = Object.prototype.hasOwnProperty.call(API_FUNCTIONS, req.fn) ? API_FUNCTIONS[req.fn] : null;
-    if (!fn) throw new Error('不明な処理です: ' + req.fn);
-    API_USER_ = String(req.user || '').slice(0, 254) || null;
-    out = { ok: true, value: fn.apply(null, Array.isArray(req.args) ? req.args : []) };
-  } catch (err) {
-    out = { ok: false, message: (err && err.message) || String(err) };
-  } finally {
-    API_USER_ = null;
-  }
-  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
-}
-
-/** 全員アクセスでデプロイしても操作画面は公開しない（画面はスプレッドシートのメニューか Netlify から使う） */
-function doGet() {
-  return ContentService.createTextOutput('EXO-TRACE API');
-}
-
-/** Netlify 連携用のシークレットを発行してスクリプトプロパティに保存する */
-function setupApiSecret() {
-  const props = PropertiesService.getScriptProperties();
-  let secret = props.getProperty('API_SECRET');
-  if (!secret) {
-    secret = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
-    props.setProperty('API_SECRET', secret);
-  }
-  SpreadsheetApp.getUi().alert('Netlify の環境変数 GAS_SECRET に次の値を設定してください（他人に見せないでください）：\n\n' + secret);
 }
 
 /** シートを作成し、初期データ（保管場所・販売可否ルール）を投入する。何度実行しても既存データは消さない。 */
@@ -230,7 +181,7 @@ function bool_(v) { return v === true || String(v).toLowerCase() === 'true' || S
 function fmtDate_(d) { return Utilities.formatDate(d, TZ, 'yyyy-MM-dd'); }
 function today_() { return fmtDate_(new Date()); }
 function now_() { return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'); }
-function user_() { return API_USER_ || Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || 'unknown'; }
+function user_() { return Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || 'unknown'; }
 function isDate_(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
 function addDays_(d, n) { return new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10); }
 function daysBetween_(a, b) { return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000); }

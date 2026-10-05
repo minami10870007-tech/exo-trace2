@@ -1,6 +1,7 @@
 # EXO-TRACE（Netlify）
-#   画面: web/src → web/dist（node web/build.mjs でハッシュ付きアセットを生成）
-#   API : netlify/functions/api.mjs（/api。Apps Script へ中継）
+#   画面  : web/src → web/dist（node web/build.mjs でハッシュ付きアセットを生成）
+#   データ: Supabase（ブラウザから直接。接続先は netlify/functions/config.mjs が環境変数から返す）
+#   環境変数: SUPABASE_URL / SUPABASE_ANON_KEY（README 参照）
 
 [build]
   command = "node web/build.mjs"
@@ -17,7 +18,7 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.supabase.co; manifest-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
@@ -47,9 +48,3 @@
   [headers.values]
     Cache-Control = "no-cache"
     Content-Type = "application/manifest+json; charset=utf-8"
-
-# 利用者登録ページ（ハッシュなしのファイル名のため常に最新を確認）
-[[headers]]
-  for = "/tools/*"
-  [headers.values]
-    Cache-Control = "no-cache"

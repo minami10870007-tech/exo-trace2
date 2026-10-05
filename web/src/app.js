@@ -1,4 +1,5 @@
-/* EXO-TRACE フロントエンド（Netlify）。サーバー処理は /api（Netlify Function → Apps Script）。
+/* EXO-TRACE フロントエンド（Netlify 配信）。データと業務処理は Supabase（認証＋データベース関数 RPC）。
+ *   接続先（Supabase の URL と公開用 anon キー）は /api/config（Netlify Function）から読む。
  * CSP（script-src 'self' / style-src 'self'）に合わせ、インラインのイベント属性・style 属性は使わない。 */
 'use strict';
 
@@ -15,9 +16,11 @@ const PAGES = [
   { id: 'master', label: 'マスタ設定', mid: 'マスタ', short: 'マスタ', icon: 'gear', grp: '設定' },
 ];
 const BOTTOM = ['dashboard', 'receipt', 'shipment', 'traceLot'];
-const STORE_KEY = 'exo-trace-session';
+const STORE_KEY = 'exo-trace-auth';
+const MSG_EXPIRED = 'ログインの有効期限が切れました。もう一度ログインしてください。';
+const MSG_OFFLINE = '通信できませんでした。電波状況を確認して、もう一度お試しください。';
 
-const S = { token: '', user: '', exp: 0, cfg: null, M: null, page: '', inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product',
+const S = { sb: null, sess: null, user: '', cfg: null, M: null, page: '', inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product',
   inventory: [], returnLine: null, pending: 0 };
 
 // ======================================================================
@@ -49,24 +52,106 @@ function progress(delta) {
   $('progress').classList.toggle('on', S.pending > 0);
 }
 
+// ----------------------------------------------------------------------
+// Supabase 接続（認証 /auth/v1 ＋ データベース関数 /rest/v1/rpc）
+// ----------------------------------------------------------------------
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/** 接続設定（Supabase の URL と公開用キー）を読む */
+async function loadConfig() {
+  let res, data = {};
+  try {
+    res = await fetch('/api/config', { cache: 'no-store' });
+    data = await res.json();
+  } catch (e) {
+    throw new Error(res ? '接続設定を読み込めませんでした（' + res.status + '）。' : MSG_OFFLINE);
+  }
+  if (!res.ok || !data.supabaseUrl || !data.supabaseKey) throw new Error(data.message || '接続設定を読み込めませんでした。');
+  S.sb = { url: data.supabaseUrl, key: data.supabaseKey };
+}
+
+async function sbFetch(path, body, token) {
+  let res;
+  try {
+    res = await fetch(S.sb.url + path, {
+      method: 'POST',
+      headers: { apikey: S.sb.key, 'Content-Type': 'application/json', Authorization: 'Bearer ' + (token || S.sb.key) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new Error(MSG_OFFLINE);
+  }
+  let data = {};
+  try { const text = await res.text(); data = text ? JSON.parse(text) : {}; } catch (e) { /* 空応答 */ }
+  return { res, data };
+}
+
+/** Supabase Auth のエラーを日本語にする */
+function authMessage(res, data) {
+  const code = data.error_code || data.error || '';
+  if (code === 'invalid_credentials' || (code === 'invalid_grant' && /credentials/i.test(data.error_description || ''))) {
+    return 'メールアドレスまたはパスワードが正しくありません。';
+  }
+  if (code === 'email_not_confirmed') return 'このメールアドレスは確認が済んでいません。管理者に連絡してください（Supabase で「Auto Confirm User」を付けて作成します）。';
+  if (code === 'user_banned') return 'このアカウントは利用停止されています。管理者に連絡してください。';
+  if (res.status === 429 || code === 'over_request_rate_limit') return 'ログインの試行回数が多すぎます。しばらく待ってからお試しください。';
+  return 'ログインできませんでした（' + (data.msg || data.error_description || data.message || res.status) + '）。';
+}
+
+function setSession(data) {
+  S.sess = { access_token: data.access_token, refresh_token: data.refresh_token,
+    expires_at: Number(data.expires_at) || nowSec() + Number(data.expires_in || 3600), user: (data.user && data.user.email) || S.user };
+  S.user = S.sess.user;
+  storage(false, S.sess);
+}
+
+/** アクセストークンを更新する。同時に呼ばれても1回だけ実行（リフレッシュトークンは1回限り有効のため） */
+let refreshing = null;
+function refreshSession() {
+  if (!refreshing) {
+    refreshing = (async () => {
+      if (!S.sess || !S.sess.refresh_token) return false;
+      // 別のタブが先に更新していれば、それを使う
+      const stored = storage(true);
+      if (stored && stored.refresh_token && stored.refresh_token !== S.sess.refresh_token && stored.expires_at > nowSec() + 60) {
+        S.sess = stored;
+        return true;
+      }
+      const { res, data } = await sbFetch('/auth/v1/token?grant_type=refresh_token', { refresh_token: S.sess.refresh_token });
+      if (!res.ok || !data.access_token) return false;
+      setSession(data);
+      return true;
+    })().finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+
+/** 画面の関数名（camelCase）と引数 → データベース関数（snake_case）と引数オブジェクト p */
+const RPC_ARGS = { getLots: ['statuses'], getRecentShipments: ['limit'], getShipmentByNo: ['no'], saveMaster: ['table', 'data'],
+  saveSalesRule: ['regulatoryClass', 'customerType', 'allowed'], cancelShipment: ['shipmentId', 'reason'], traceLot: ['query'],
+  traceCustomer: ['customerId', 'from', 'to'], reextractRecall: ['recallId'], closeRecall: ['recallId'] };
+
+function rpcError(res, data) {
+  if (data.code === 'P0001' && data.message) return new Error(data.message); // 業務エラー（入力チェック等）
+  if (data.code === 'PGRST202' || res.status === 404) {
+    return new Error('データベースの準備ができていません。Supabase の SQL Editor で supabase/schema.sql を実行してください。');
+  }
+  return new Error('サーバーでエラーが発生しました（' + (data.message || res.status) + '）。時間をおいて再度お試しください。');
+}
+
 async function api(fn, ...args) {
+  const p = RPC_ARGS[fn] ? Object.fromEntries(RPC_ARGS[fn].map((k, i) => [k, args[i] === undefined ? null : args[i]])) : (args[0] || {});
+  const path = '/rest/v1/rpc/' + fn.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
   progress(1);
   try {
-    let res;
-    try {
-      res = await fetch('/api', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + S.token },
-        body: JSON.stringify({ fn, args }),
-      });
-    } catch (e) {
-      throw new Error('通信できませんでした。電波状況を確認して、もう一度お試しください。');
-    }
-    let data = {};
-    try { data = await res.json(); } catch (e) { /* 空応答 */ }
-    if (res.status === 401) { logout(data.message); throw new Error(data.message || 'ログインしてください。'); }
-    if (!res.ok) throw new Error(data.message || 'エラーが発生しました（' + res.status + '）。');
-    return data.value;
+    if (!S.sess) throw new Error(MSG_EXPIRED);
+    if (S.sess.expires_at < nowSec() + 60 && !(await refreshSession())) { logout(MSG_EXPIRED); throw new Error(MSG_EXPIRED); }
+    let { res, data } = await sbFetch(path, { p }, S.sess.access_token);
+    if (res.status === 401 && (await refreshSession())) ({ res, data } = await sbFetch(path, { p }, S.sess.access_token));
+    if (res.status === 401) { logout(MSG_EXPIRED); throw new Error(MSG_EXPIRED); }
+    if (res.status === 403) { const msg = data.message || 'この操作を行う権限がありません。'; logout(msg); throw new Error(msg); }
+    if (!res.ok) throw rpcError(res, data);
+    return data;
   } finally {
     progress(-1);
   }
@@ -186,15 +271,22 @@ function ask(o) {
 // 認証・起動
 // ======================================================================
 function showLogin(message) {
+  closeSheet();
+  if ($('dialog').open) $('dialog').close();
+  if ($('masterDialog').open) $('masterDialog').close();
   $('app').hidden = true;
   $('login').hidden = false;
   alertBox('loginMsg', message || '', 'ng');
+  if (S.user && !$('loginEmail').value) $('loginEmail').value = S.user;
   setTimeout(() => $(S.user ? 'loginPassword' : 'loginEmail').focus(), 0);
 }
 
 function logout(message) {
-  storage(false, null);
-  S.token = '';
+  const sess = S.sess;
+  S.sess = null;
+  storage(false, S.user ? { user: S.user } : null); // 次回ログイン用にメールアドレスだけ残す
+  // サーバー側のセッションも無効化（失敗しても画面はログアウトする）
+  if (sess && S.sb) sbFetch('/auth/v1/logout?scope=local', undefined, sess.access_token).catch(() => {});
   showLogin(typeof message === 'string' ? message : '');
 }
 
@@ -204,12 +296,14 @@ async function login(e) {
   await busy(btn, async () => {
     alertBox('loginMsg', '');
     try {
-      const res = await fetch('/api', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'login', email: $('loginEmail').value, password: $('loginPassword').value }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'ログインできませんでした。');
-      Object.assign(S, { token: data.token, user: data.user, exp: data.exp });
-      storage(false, { token: data.token, user: data.user, exp: data.exp });
+      if (!S.sb) await loadConfig();
+      const email = $('loginEmail').value.trim();
+      const password = $('loginPassword').value;
+      if (!email || !password) throw new Error('メールアドレスとパスワードを入力してください。');
+      const { res, data } = await sbFetch('/auth/v1/token?grant_type=password', { email, password });
+      if (!res.ok || !data.access_token) throw new Error(authMessage(res, data));
+      S.user = email;
+      setSession(data);
       $('loginPassword').value = '';
       await boot();
     } catch (err) {
@@ -219,19 +313,24 @@ async function login(e) {
 }
 
 async function boot() {
+  try {
+    S.cfg = await api('getConfig'); // 利用権限の確認を兼ねる（権限がなければログイン画面に戻る）
+  } catch (err) {
+    if (S.sess) showLogin(err.message);
+    return;
+  }
   $('login').hidden = true;
   $('app').hidden = false;
   renderNav();
   $('whoSide').textContent = S.user;
   $('whoSheet').textContent = S.user;
   try {
-    S.cfg = await api('getConfig');
     await reloadMasters();
     ['rcDate', 'shDate'].forEach((id) => { $(id).value = S.cfg.today; });
     if (!$('shLines').children.length) addLine();
     route();
   } catch (err) {
-    if (S.token) toast(err.message, 'ng');
+    if (S.sess) toast(err.message, 'ng');
   }
 }
 
@@ -326,7 +425,11 @@ async function loadDashboard() {
       <div class="meter"><i data-w="${r.recoveredRate}"></i></div></div>
       <button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="recall">開く</button></li>`).join('') + '</ul>'
     : empty('対応中の回収案件はありません', 'check');
-  $('dashBody').innerHTML =
+  const lc = d.lastCheck;
+  const mismatch = lc && lc.mismatches && lc.mismatches.length ? `<div class="alert alert-ng span-full" role="alert">在庫数と在庫移動履歴が一致しない在庫が ${lc.mismatches.length} 件あります（日次チェック ${esc(lc.ran_at)}）。\n` +
+    lc.mismatches.slice(0, 5).map((m) => `${esc(m.lot_no)}／${esc(m.location)}：在庫 ${fmt(m.on_hand)}・履歴合計 ${fmt(m.movement_total)}`).join('\n') +
+    (lc.mismatches.length > 5 ? '\nほか ' + (lc.mismatches.length - 5) + ' 件' : '') + '\n管理者に確認してください。</div>' : '';
+  $('dashBody').innerHTML = mismatch +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
       d.lowStock.map((x) => ({ cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +
@@ -911,7 +1014,7 @@ document.addEventListener('input', (e) => {
   if (e.target.classList.contains('insReason')) updateInspectAction(e.target.dataset.id);
 });
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   $('loginForm').addEventListener('submit', login);
   $('receiptForm').addEventListener('submit', submitReceipt);
   $('shipForm').addEventListener('submit', submitShipment);
@@ -930,15 +1033,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const b = e.target.closest('button[data-table]');
     if (b) { S.masterTable = b.dataset.table; loadMaster().catch((err) => toast(err.message, 'ng')); }
   });
-  window.addEventListener('hashchange', () => { if (S.token) route(); });
+  window.addEventListener('hashchange', () => { if (S.sess) route(); });
+  // 別のタブでのログアウト・トークン更新を反映する
+  window.addEventListener('storage', (e) => {
+    if (e.key !== STORE_KEY) return;
+    const saved = storage(true);
+    if (S.sess && !(saved && saved.refresh_token)) { S.sess = null; showLogin('別の画面でログアウトしました。'); } else if (S.sess) S.sess = saved;
+  });
 
+  try { localStorage.removeItem('exo-trace-session'); } catch (e) { /* 旧版（Apps Script 連携）のログイン情報 */ }
+  try {
+    await loadConfig();
+  } catch (err) {
+    showLogin(err.message);
+    return;
+  }
   const saved = storage(true);
-  if (saved && saved.token && saved.exp > Date.now() / 1000 + 60) {
-    Object.assign(S, saved);
+  if (saved && saved.refresh_token) {
+    S.sess = saved;
+    S.user = saved.user || '';
     boot();
   } else {
-    if (saved) S.user = saved.user || '';
-    if (S.user) $('loginEmail').value = S.user;
+    if (saved && saved.user) S.user = saved.user;
     showLogin('');
   }
 });

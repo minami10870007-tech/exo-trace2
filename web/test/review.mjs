@@ -4,7 +4,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { startServer, DEMO_USER } from './serve.mjs';
+import { startServer, DEMO_USER, OUTSIDER } from './serve.mjs';
+import { psql } from '../../supabase/test/harness.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -301,21 +302,59 @@ for (const vp of VIEWPORTS) {
     if (await page.$('#masterDialog[open]')) throw new Error(await page.textContent('#masterMsg'));
   });
   await step('作成者がログインユーザーで記録される', async () => {
-    const rows = server.env.sheets.t_receipt._data();
-    if (!rows.some((r) => r && r.includes('FLOW-001') && r.includes(DEMO_USER.email))) throw new Error('created_by がログインユーザーでない');
+    const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
+    if (n !== '1') throw new Error('created_by がログインユーザーでない');
   });
   await step('未ログインの API は 401', async () => {
-    const st = await page.evaluate(async () => (await fetch('/api', { method: 'POST', body: JSON.stringify({ fn: 'getMasters', args: [] }) })).status);
+    const st = await page.evaluate(async ([url, key]) => (await fetch(url + '/rest/v1/rpc/get_masters', { method: 'POST',
+      headers: { apikey: key, 'Content-Type': 'application/json' }, body: '{}' })).status, [server.sb.url, server.sb.anonKey]);
     if (st !== 401) throw new Error('status ' + st);
   });
-  await step('許可外の関数は拒否', async () => {
-    const st = await page.evaluate(async () => {
-      const s = JSON.parse(localStorage.getItem('exo-trace-session'));
-      return (await fetch('/api', { method: 'POST', headers: { Authorization: 'Bearer ' + s.token }, body: JSON.stringify({ fn: 'setup', args: [] }) })).status;
+  await step('内部関数・テーブルは API から見えない', async () => {
+    const st = await page.evaluate(async ([url, key]) => {
+      const s = JSON.parse(localStorage.getItem('exo-trace-auth'));
+      const h = { apikey: key, Authorization: 'Bearer ' + s.access_token, 'Content-Type': 'application/json' };
+      return [(await fetch(url + '/rest/v1/rpc/daily_check', { method: 'POST', headers: h, body: '{}' })).status,
+        (await fetch(url + '/rest/v1/t_lot', { headers: h })).status];
+    }, [server.sb.url, server.sb.anonKey]);
+    if (st.join() !== '404,404') throw new Error('status ' + st);
+  });
+  await step('アクセストークンの期限切れは自動更新', async () => {
+    const before = server.sb.stats.refresh;
+    await page.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('exo-trace-auth'));
+      s.expires_at = Math.floor(Date.now() / 1000) - 10;
+      localStorage.setItem('exo-trace-auth', JSON.stringify(s));
     });
-    if (st !== 400) throw new Error('status ' + st);
+    await page.reload(); await page.waitForSelector('#app:not([hidden])'); await idle(page);
+    await page.click('[data-action="reload"]'); await waitText('#toasts', /更新しました/);
+    if (server.sb.stats.refresh !== before + 1) throw new Error('更新回数 ' + (server.sb.stats.refresh - before) + '（同時に複数回更新していないか）');
+    if (await page.$('#login:not([hidden])')) throw new Error('ログアウトされた');
+  });
+  await step('更新できないセッションはログイン画面へ', async () => {
+    await page.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem('exo-trace-auth'));
+      s.expires_at = Math.floor(Date.now() / 1000) - 10; s.refresh_token = 'revoked';
+      localStorage.setItem('exo-trace-auth', JSON.stringify(s));
+    });
+    await page.reload(); await page.waitForSelector('#login:not([hidden])');
+    const t = await page.textContent('#loginMsg'); if (!/有効期限/.test(t)) throw new Error('メッセージ: ' + t);
+    if ((await page.inputValue('#loginEmail')) !== DEMO_USER.email) throw new Error('メールアドレスが入っていない');
+    await page.fill('#loginPassword', DEMO_USER.password); await page.click('#loginForm button[type="submit"]');
+    await page.waitForSelector('#app:not([hidden])'); await idle(page);
   });
   await step('ログアウト', async () => { await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]'); await page.waitForSelector('#login:not([hidden])'); });
+  await step('パスワード誤り', async () => {
+    await page.fill('#loginEmail', DEMO_USER.email); await page.fill('#loginPassword', 'wrong-password');
+    await page.click('#loginForm button[type="submit"]'); await waitText('#loginMsg', /。/);
+    const t = await page.textContent('#loginMsg'); if (!/正しくありません/.test(t)) throw new Error(t);
+  });
+  await step('利用者登録されていない人は使えない', async () => {
+    await page.fill('#loginEmail', OUTSIDER.email); await page.fill('#loginPassword', OUTSIDER.password);
+    await page.click('#loginForm button[type="submit"]'); await page.waitForSelector('#login:not([hidden])');
+    await waitText('#loginMsg', /利用権限/);
+    if (await page.evaluate(() => JSON.parse(localStorage.getItem('exo-trace-auth') || '{}').refresh_token)) throw new Error('セッションが残っている');
+  });
   if (errs.length) { report.errors.push({ viewport: 'flow', errs }); total += errs.length; }
   await ctx.close();
 }

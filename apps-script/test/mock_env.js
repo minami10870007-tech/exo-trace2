@@ -49,11 +49,6 @@ const sandbox = {
   LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
   Session: { getActiveUser: () => ({ getEmail: () => currentUser }), getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
   MailApp: { sendEmail: (to, subj, body) => mails.push({ to, subj, body }) },
-  PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k === 'API_SECRET' ? 'test-gas-secret' : null), setProperty: () => {} }) },
-  ContentService: {
-    MimeType: { JSON: 'application/json' },
-    createTextOutput: s => ({ setMimeType() { return this; }, getContent: () => s }),
-  },
   HtmlService: {},
   Utilities: {
     formatDate: (d, tz, fmt) => {

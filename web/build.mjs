@@ -29,7 +29,5 @@ writeFileSync(join(dist, 'index.html'), html);
 for (const f of ['icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-512-maskable.png', 'manifest.webmanifest']) {
   cpSync(join(src, f), join(dist, f));
 }
-// 利用者登録ページ（ブラウザ内で EXO_USERS の文字列を作る。外部送信なし）
-cpSync(join(src, 'tools'), join(dist, 'tools'), { recursive: true });
 writeFileSync(join(dist, 'robots.txt'), 'User-agent: *\nDisallow: /\n');
 console.log('built →', dist);
