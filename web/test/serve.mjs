@@ -11,6 +11,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
 
 export const DEMO_USER = { email: 'demo@example.com', password: 'demo-password-123' };
+/** 2人目の利用者（別アカウントへの切り替えの確認用） */
+export const SECOND_USER = { email: 'staff@example.com', password: 'staff-password-123' };
 /** Supabase にはログインできるが、利用者登録（exo.app_user）されていない人 */
 export const OUTSIDER = { email: 'outsider@example.com', password: 'outsider-password-1' };
 
@@ -34,7 +36,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain' };
 
 export async function startServer({ port = 8888, seed = true, db = 'exo_web_test' } = {}) {
-  const sb = await startSupabase({ db, users: [{ ...DEMO_USER, allowed: true }, { ...OUTSIDER, allowed: false }] });
+  const sb = await startSupabase({ db, users: [{ ...DEMO_USER, allowed: true }, { ...SECOND_USER, allowed: true }, { ...OUTSIDER, allowed: false }] });
   if (seed) await seedData(sb);
 
   process.env.SUPABASE_URL = sb.url;

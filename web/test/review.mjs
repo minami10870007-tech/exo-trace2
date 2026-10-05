@@ -4,7 +4,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { startServer, DEMO_USER, OUTSIDER } from './serve.mjs';
+import { startServer, DEMO_USER, SECOND_USER, OUTSIDER } from './serve.mjs';
 import { psql } from '../../supabase/test/harness.mjs';
 
 const require = createRequire(import.meta.url);
@@ -356,6 +356,39 @@ for (const vp of VIEWPORTS) {
     if (await page.evaluate(() => JSON.parse(localStorage.getItem('exo-trace-auth') || '{}').refresh_token)) throw new Error('セッションが残っている');
   });
   if (errs.length) { report.errors.push({ viewport: 'flow', errs }); total += errs.length; }
+  await ctx.close();
+}
+
+// ---------------- 複数タブ・通信障害 ----------------
+{
+  const { ctx, page, errs } = await newPage(VIEWPORTS[5]);
+  const step = async (label, fn) => {
+    try { await fn(); report.flow.push({ step: label, ok: true }); }
+    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0] }); total++; }
+  };
+  const page2 = await ctx.newPage();
+  await step('別タブで別アカウントがログインすると元のタブはログアウト', async () => {
+    await login(page);
+    await page2.goto(server.url + '/'); await page2.waitForSelector('#app:not([hidden])'); // 同じセッションを引き継ぐ
+    await page2.click('[data-action="logout"]'); await page2.waitForSelector('#login:not([hidden])');
+    await page.waitForSelector('#login:not([hidden])');
+    if (!/別の画面でログアウト/.test(await page.textContent('#loginMsg'))) throw new Error('ログアウトが伝わらない');
+    await login(page);
+    await page2.fill('#loginEmail', SECOND_USER.email); await page2.fill('#loginPassword', SECOND_USER.password);
+    await page2.click('#loginForm button[type="submit"]'); await page2.waitForSelector('#app:not([hidden])');
+    await page.waitForSelector('#login:not([hidden])');
+    const t = await page.textContent('#loginMsg'); if (!t.includes(SECOND_USER.email)) throw new Error(t);
+  });
+  await step('通信障害では再接続ボタン（セッションは保持）', async () => {
+    await page2.route(server.sb.url + '/**', (r) => r.abort());
+    await page2.reload(); await page2.waitForSelector('#retryBtn:not([hidden])');
+    if (!/通信できませんでした/.test(await page2.textContent('#loginMsg'))) throw new Error(await page2.textContent('#loginMsg'));
+    await page2.unroute(server.sb.url + '/**');
+    await page2.click('#retryBtn'); await page2.waitForSelector('#app:not([hidden])'); await idle(page2);
+    if ((await page2.textContent('#whoSide')) !== SECOND_USER.email) throw new Error('利用者が違う');
+  });
+  const real = errs.filter((e) => !/net::ERR_FAILED|Failed to fetch/.test(e));
+  if (real.length) { report.errors.push({ viewport: 'multi-tab', errs: real }); total += real.length; }
   await ctx.close();
 }
 

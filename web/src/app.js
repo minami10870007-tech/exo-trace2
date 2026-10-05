@@ -93,38 +93,56 @@ function authMessage(res, data) {
   if (code === 'invalid_credentials' || (code === 'invalid_grant' && /credentials/i.test(data.error_description || ''))) {
     return 'メールアドレスまたはパスワードが正しくありません。';
   }
-  if (code === 'email_not_confirmed') return 'このメールアドレスは確認が済んでいません。管理者に連絡してください（Supabase で「Auto Confirm User」を付けて作成します）。';
+  if (code === 'email_not_confirmed') return 'このアカウントはまだ有効になっていません。管理者に連絡してください。';
   if (code === 'user_banned') return 'このアカウントは利用停止されています。管理者に連絡してください。';
+  if (code === 'validation_failed' || code === 'email_address_invalid') return 'メールアドレスの形式が正しくありません。';
   if (res.status === 429 || code === 'over_request_rate_limit') return 'ログインの試行回数が多すぎます。しばらく待ってからお試しください。';
+  if (res.status >= 500) return 'ログインサーバーに接続できません。しばらくしてから再度お試しください。（' + res.status + '）';
   return 'ログインできませんでした（' + (data.msg || data.error_description || data.message || res.status) + '）。';
 }
 
-function setSession(data) {
+/** persist=false のときは保存しない（ログイン直後、利用権限を確認してから保存する） */
+function setSession(data, persist) {
   S.sess = { access_token: data.access_token, refresh_token: data.refresh_token,
     expires_at: Number(data.expires_at) || nowSec() + Number(data.expires_in || 3600), user: (data.user && data.user.email) || S.user };
   S.user = S.sess.user;
-  storage(false, S.sess);
+  if (persist !== false) storage(false, S.sess);
 }
 
-/** アクセストークンを更新する。同時に呼ばれても1回だけ実行（リフレッシュトークンは1回限り有効のため） */
+/**
+ * アクセストークンを更新する。同時に呼ばれても1回だけ実行（リフレッシュトークンは1回限り有効のため）。
+ * 戻り値：true＝更新できた／false＝セッションが無効（再ログインが必要）。一時的な障害は例外。
+ */
 let refreshing = null;
 function refreshSession() {
   if (!refreshing) {
     refreshing = (async () => {
       if (!S.sess || !S.sess.refresh_token) return false;
-      // 別のタブが先に更新していれば、それを使う
+      // 別のタブが先に更新していれば、その新しいトークンを使う（古いリフレッシュトークンを再利用しない）
       const stored = storage(true);
-      if (stored && stored.refresh_token && stored.refresh_token !== S.sess.refresh_token && stored.expires_at > nowSec() + 60) {
+      if (stored && stored.refresh_token && stored.user === S.sess.user && stored.refresh_token !== S.sess.refresh_token) {
         S.sess = stored;
-        return true;
+        if (stored.expires_at > nowSec() + 60) return true;
       }
-      const { res, data } = await sbFetch('/auth/v1/token?grant_type=refresh_token', { refresh_token: S.sess.refresh_token });
-      if (!res.ok || !data.access_token) return false;
-      setSession(data);
-      return true;
+      const cur = S.sess;
+      const { res, data } = await sbFetch('/auth/v1/token?grant_type=refresh_token', { refresh_token: cur.refresh_token });
+      if (S.sess !== cur) return !!S.sess; // 更新中にログアウト・切り替えされた：結果は保存しない
+      if (res.ok && data.access_token) { setSession(data); return true; }
+      if ([400, 401, 403].includes(res.status)) return false;
+      throw new Error('サーバーに接続できません。しばらくしてから再度お試しください。（' + res.status + '）');
     })().finally(() => { refreshing = null; });
   }
   return refreshing;
+}
+
+/** 有効なアクセストークンを用意する。sentToken を指定したら、そのトークンが拒否された前提で更新する */
+async function ensureSession(sentToken) {
+  if (!S.sess) throw new Error(MSG_EXPIRED);
+  if (sentToken ? S.sess.access_token !== sentToken : S.sess.expires_at >= nowSec() + 60) return; // 更新不要・別の呼び出しで更新済み
+  if (!(await refreshSession())) {
+    if (S.sess) logout(MSG_EXPIRED);
+    throw new Error(MSG_EXPIRED);
+  }
 }
 
 /** 画面の関数名（camelCase）と引数 → データベース関数（snake_case）と引数オブジェクト p */
@@ -145,12 +163,17 @@ async function api(fn, ...args) {
   const path = '/rest/v1/rpc/' + fn.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
   progress(1);
   try {
-    if (!S.sess) throw new Error(MSG_EXPIRED);
-    if (S.sess.expires_at < nowSec() + 60 && !(await refreshSession())) { logout(MSG_EXPIRED); throw new Error(MSG_EXPIRED); }
-    let { res, data } = await sbFetch(path, { p }, S.sess.access_token);
-    if (res.status === 401 && (await refreshSession())) ({ res, data } = await sbFetch(path, { p }, S.sess.access_token));
+    await ensureSession();
+    const sent = S.sess.access_token;
+    let { res, data } = await sbFetch(path, { p }, sent);
+    if (res.status === 401) {
+      await ensureSession(sent);
+      ({ res, data } = await sbFetch(path, { p }, S.sess.access_token));
+    }
     if (res.status === 401) { logout(MSG_EXPIRED); throw new Error(MSG_EXPIRED); }
-    if (res.status === 403) { const msg = data.message || 'この操作を行う権限がありません。'; logout(msg); throw new Error(msg); }
+    // 利用者登録が無い・停止された（データベース関数 exo.require_user のエラー）→ ログアウト
+    if (res.status === 403 && /利用権限|ログインしてください/.test(data.message || '')) { logout(data.message); throw new Error(data.message); }
+    if (res.status === 403) throw new Error('この操作を行う権限がありません。管理者に連絡してください。');
     if (!res.ok) throw rpcError(res, data);
     return data;
   } finally {
@@ -271,7 +294,8 @@ function ask(o) {
 // ======================================================================
 // 認証・起動
 // ======================================================================
-function showLogin(message) {
+function showLogin(message, canRetry) {
+  $('retryBtn').hidden = !canRetry;
   closeSheet();
   if ($('dialog').open) $('dialog').close();
   if ($('masterDialog').open) $('masterDialog').close();
@@ -280,6 +304,13 @@ function showLogin(message) {
   alertBox('loginMsg', message || '', 'ng');
   if (S.user && !$('loginEmail').value) $('loginEmail').value = S.user;
   setTimeout(() => $(S.user ? 'loginPassword' : 'loginEmail').focus(), 0);
+}
+
+/** この画面だけログイン画面に戻す（保存されたセッションには触れない。別のタブの状態変化を受けたとき用） */
+function endLocal(message) {
+  S.sess = null;
+  clearScreens();
+  showLogin(message);
 }
 
 function logout(message) {
@@ -315,8 +346,11 @@ async function login(e) {
       if (!email || !password) throw new Error('メールアドレスとパスワードを入力してください。');
       const { res, data } = await sbFetch('/auth/v1/token?grant_type=password', { email, password });
       if (!res.ok || !data.access_token) throw new Error(authMessage(res, data));
+      const old = S.sess;
+      if (old) sbFetch('/auth/v1/logout?scope=local', undefined, old.access_token).catch(() => {}); // 前のセッションは無効化
+      if (S.user && S.user.toLowerCase() !== email.toLowerCase()) clearScreens();
       S.user = email;
-      setSession(data);
+      setSession(data, false);
       $('loginPassword').value = '';
       await boot();
     } catch (err) {
@@ -329,9 +363,11 @@ async function boot() {
   try {
     S.cfg = await api('getConfig'); // 利用権限の確認を兼ねる（権限がなければログイン画面に戻る）
   } catch (err) {
-    if (S.sess) showLogin(err.message);
+    // 通信障害など：セッションは残したまま、再接続できるようにする
+    if (S.sess) showLogin(err.message, true);
     return;
   }
+  storage(false, S.sess); // 利用権限を確認できたセッションだけを保存する
   $('login').hidden = true;
   $('app').hidden = false;
   renderNav();
@@ -345,6 +381,20 @@ async function boot() {
   } catch (err) {
     if (S.sess) toast(err.message, 'ng');
   }
+}
+
+/** 再接続（通信障害・設定の読み込み失敗からの復帰） */
+async function retry(btn) {
+  await busy(btn, async () => {
+    alertBox('loginMsg', '');
+    try {
+      if (!S.sb) await loadConfig();
+    } catch (err) {
+      showLogin(err.message, true);
+      return;
+    }
+    if (S.sess) await boot(); else showLogin('');
+  });
 }
 
 function renderNav() {
@@ -982,6 +1032,7 @@ const ACTIONS = {
   go: (el) => go(el.dataset.page),
   openSheet, closeSheet,
   logout: () => logout(''),
+  retry,
   reload: async (el) => busy(el, async () => {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
@@ -1046,22 +1097,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     const b = e.target.closest('button[data-table]');
     if (b) { S.masterTable = b.dataset.table; loadMaster().catch((err) => toast(err.message, 'ng')); }
   });
-  window.addEventListener('hashchange', () => { if (S.sess) route(); });
+  window.addEventListener('hashchange', () => { if (S.sess && !$('app').hidden) route(); });
+  window.addEventListener('online', () => { if (!$('retryBtn').hidden) retry($('retryBtn')); });
   // 別のタブでのログアウト・トークン更新を反映する
   window.addEventListener('storage', (e) => {
     if (e.key !== STORE_KEY) return;
     const saved = storage(true);
-    if (S.sess && !(saved && saved.refresh_token)) { S.sess = null; showLogin('別の画面でログアウトしました。'); } else if (S.sess) S.sess = saved;
+    if (!S.sess) return;
+    if (!saved || !saved.refresh_token) endLocal('別の画面でログアウトしたため、この画面もログアウトしました。');
+    else if (saved.user !== S.sess.user) endLocal('別の画面で別のアカウント（' + saved.user + '）がログインしたため、この画面はログアウトしました。');
+    else S.sess = saved;
   });
 
   try { localStorage.removeItem('exo-trace-session'); } catch (e) { /* 旧版（Apps Script 連携）のログイン情報 */ }
+  const saved = storage(true);
+  if (saved && saved.refresh_token) { S.sess = saved; S.user = saved.user || ''; }
   try {
     await loadConfig();
   } catch (err) {
-    showLogin(err.message);
+    showLogin(err.message, true);
     return;
   }
-  const saved = storage(true);
   if (saved && saved.refresh_token) {
     S.sess = saved;
     S.user = saved.user || '';

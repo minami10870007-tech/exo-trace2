@@ -106,7 +106,7 @@ xlsx を直接編集すると次回の生成で上書きされます。変更は
 - **更新版の `schema.sql`：** もう一度 SQL Editor に貼って実行します。データは消えません。
 - **Supabase の無料プラン：** しばらく利用がないとプロジェクトが一時停止します（事前にメールが届きます）。ダッシュボードの「Resume project」で再開できます。データは保持されます（停止から1年以内）。
 - **Netlify の環境変数を変えたとき：** 再デプロイすると反映されます。
-- **独自ドメインの Supabase：** `*.supabase.co` 以外の URL を使う場合は、`netlify.toml` の CSP（`connect-src`）にその URL を追加してください。
+- **独自ドメインの Supabase：** `*.supabase.co` 以外の URL を使う場合は、`netlify.toml` の CSP（`connect-src`）と `netlify/functions/config.mjs` の URL チェックの両方に、そのドメインを追加してください。
 
 ### ローカルで確認・テスト
 

@@ -32,8 +32,9 @@ export default async (req) => {
   if (!url || !key) {
     return json({ message: 'Supabase の接続設定がありません。Netlify の環境変数 SUPABASE_URL と SUPABASE_ANON_KEY を設定してから、再デプロイしてください。' }, 500);
   }
-  if (!/^https:\/\/[a-z0-9.-]+$/i.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(url)) {
-    return json({ message: '環境変数 SUPABASE_URL の形式が正しくありません（例：https://abcdefgh.supabase.co。末尾に /rest/v1 などは付けません）。' }, 500);
+  // 画面の CSP（netlify.toml の connect-src）は https://*.supabase.co だけを許可している。独自ドメインを使う場合は両方を変更する
+  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(url)) {
+    return json({ message: '環境変数 SUPABASE_URL の形式が正しくありません。https://（英数字）.supabase.co の形で入力してください（末尾に / や /rest/v1 などは付けません）。' }, 500);
   }
   const kind = keyKind(key);
   if (kind === 'secret') {
