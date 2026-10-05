@@ -408,6 +408,30 @@ for (const vp of VIEWPORTS) {
     }
     await page.fill('.slQty', ''); await page.fill('#shNote', '');
   });
+  await step('「戻る」：ロット追跡・返品・顧客追跡で前の表示に戻り、画面から出られる', async () => {
+    const hash = () => page.evaluate(() => location.hash);
+    const waitHash = (re) => page.waitForFunction((src) => new RegExp(src).test(location.hash), re.source, { timeout: 10000 }).catch(async () => { throw new Error('URL が ' + (await hash()) + '（期待 ' + re + '）'); });
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+    await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page); await waitHash(/^#\/traceLot$/); // メニューからだと前の検索が開くので、検索なしの URL で開く
+    const chips = await page.$$eval('#tlRecent [data-action="traceLotNo"]', (b) => b.map((x) => x.dataset.lot));
+    if (chips.length < 2) throw new Error('最近のロットが2件未満');
+    await page.click(`#tlRecent [data-lot="${chips[0]}"]`); await idle(page); await waitHash(new RegExp('q=' + chips[0]));
+    await page.fill('#tlQuery', chips[1]); await page.click('#tlSearch button[type="submit"]'); await idle(page); await waitHash(new RegExp('q=' + chips[1]));
+    await page.goBack(); await idle(page); await waitHash(new RegExp('q=' + chips[0] + '$'));
+    await page.waitForTimeout(800); if (!(await hash()).endsWith(chips[0])) throw new Error('戻ったのに URL が変わった: ' + (await hash()));
+    if ((await page.inputValue('#tlQuery')) !== chips[0]) throw new Error('検索欄が前のロットでない');
+    await page.goBack(); await idle(page); await waitHash(/^#\/traceLot$/);
+    await page.waitForTimeout(500); if (await page.$('#tlBody .lot-card')) throw new Error('結果が残っている');
+    await page.goBack(); await idle(page); await waitHash(/^#\/dashboard/);
+    // 返品：一覧 → 出荷を選ぶ → 戻る → 一覧 → 戻る → ホーム
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
+    if (/no=/.test(await hash())) { await page.click('#rtShipment [data-action="newReturn"]'); await idle(page); }
+    await page.waitForSelector('#rtRecent [data-action="pickReturnShipment"]');
+    await page.click('#rtRecent [data-action="pickReturnShipment"]'); await idle(page); await waitHash(/no=/);
+    await page.goBack(); await idle(page); await waitHash(/^#\/return$/);
+    await page.waitForTimeout(800); if (/no=/.test(await hash())) throw new Error('出荷が再び開いた');
+    await page.waitForSelector('#rtRecent [data-action="pickReturnShipment"]', { timeout: 5000 }).catch(() => { throw new Error('最近の出荷が出ない'); });
+  });
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
     await page.fill('#rtShipNo', 'SH-202610-0003'); await page.click('#rtSearch button[type="submit"]'); await idle(page); await page.waitForTimeout(500);

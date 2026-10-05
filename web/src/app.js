@@ -20,7 +20,7 @@ const STORE_KEY = 'exo-trace-auth';
 const MSG_EXPIRED = 'ログインの有効期限が切れました。もう一度ログインしてください。';
 const MSG_OFFLINE = '通信できませんでした。電波状況を確認して、もう一度お試しください。';
 
-const S = { sb: null, sess: null, user: '', cfg: null, M: null, page: '', inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product',
+const S = { pageHash: {}, sb: null, sess: null, user: '', cfg: null, M: null, page: '', inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product',
   inventory: [], returnLine: null, pending: 0 };
 
 // ======================================================================
@@ -482,6 +482,7 @@ function restoreDialog(d) {
 
 /** 前の利用者の入力内容・表示結果を消す（共用端末で別の人がログインする場合に備える） */
 function clearScreens() {
+  S.pageHash = {};
   try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
   document.querySelectorAll('#app form').forEach((f) => f.reset());
   ['dashKpis', 'dashBody', 'shDone', 'invMsg', 'tcMsg', 'rtFindMsg', 'rtRecent', 'tlRecent', 'rcMsg', 'insMsg', 'insBody', 'shLines', 'shMsg', 'shRecent', 'rtShipment', 'rtMsg', 'invBody', 'tlBody', 'tcBody',
@@ -608,9 +609,25 @@ function renderNav() {
     `<button type="button" data-action="go" data-page="${p.id}">${icon(p.icon)}<span>${esc(p.mid || p.label)}</span></button>`).join('');
 }
 
+/**
+ * 画面の URL を変える。push=true は利用者の操作で表示が変わったとき（「戻る」で前の表示へ戻れるように履歴を積む）。
+ * 画面を開いたときの読み込み（URL に合わせて表示する）では積まない。各画面の最後の URL は、メニューから開き直したときに使う
+ */
+function setUrl(h, push) {
+  if (location.hash === h) return;
+  if (push) history.pushState(null, '', h); else history.replaceState(null, '', h);
+  S.lastHash = h;
+  S.pageHash[(h.match(/^#\/(\w+)/) || [])[1]] = h;
+}
+/** URL を開く（同じ URL ならその画面を読み込み直す） */
+function goUrl(h) {
+  if (location.hash === h) showPage((h.match(/^#\/(\w+)/) || [])[1]); else location.hash = h;
+}
+
 function route() {
   S.lastHash = location.hash;
   const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
+  if (id) S.pageHash[id] = location.hash;
   const page = PAGES.find((p) => p.id === id) || PAGES[0];
   showPage(page.id);
 }
@@ -647,7 +664,7 @@ function showPage(id) {
 }
 
 function go(id) {
-  if (location.hash === '#/' + id) showPage(id); else location.hash = '#/' + id;
+  goUrl(S.pageHash[id] || '#/' + id); // 前に開いていた検索・出荷があれば、それを開く
 }
 
 function openSheet() {
@@ -1104,9 +1121,9 @@ async function changeStatus(btn) {
       const lotNo0 = card0 ? card0.querySelector('.lot-no').textContent : '';
       await loadInspect().catch(() => {});
       const gone = /他の利用者/.test(err.message) && !$('to_' + id);
-      if (gone) S.insFocusLot = lotNo0;
+      if (gone) { S.insFocusLot = lotNo0; S.insReason = { id, reason: reason0, to: $('to_' + id) ? '' : to }; }
       const typed = !$('rs_' + id) && reason0.trim() ? `\n入力していた理由：${reason0.trim()}` : ''; // 欄が消えても、入力した理由を写せるように
-      alertBox('insMsg', (gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + 'このロットは今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message) + typed, 'ng', false,
+      alertBox('insMsg', (gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + '今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message) + typed, 'ng', false,
         gone ? '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>' : '');
     }
   });
@@ -1293,14 +1310,14 @@ async function cancelShip(btn) {
 // ======================================================================
 // 返品
 // ======================================================================
-async function findShipmentForReturn(e, keepMsg) {
+async function findShipmentForReturn(e, keepMsg, fromUrl) {
   if (e) e.preventDefault();
   if (!keepMsg) alertBox('rtFindMsg', '');
   alertBox('rtMsg', '');
   if (!$('rtShipNo').value.trim()) {
     // 空のまま検索したら、最近の出荷の一覧を出す
     $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null;
-    history.replaceState(null, '', '#/return');
+    setUrl('#/return', false);
     await loadReturnRecent();
     alertBox('rtFindMsg', '出荷番号を入力するか、下の「最近の出荷」から選んでください。', 'info', true);
     $('rtShipNo').focus();
@@ -1322,16 +1339,14 @@ async function findShipmentForReturn(e, keepMsg) {
       $('rtRecent').innerHTML = '';
       // 再読み込みしても同じ出荷を開けるよう、出荷番号を URL に残す
       // 別の出荷に切り替えたときは履歴を積む（「戻る」で前の出荷に戻れるように）
-      // （最近の出荷から選んだときも積むので、「戻る」で一覧に戻れる）
-      const prevNo = decodeURIComponent((location.hash.match(/[?&]no=([^&]+)/) || [])[1] || '');
+      // （最近の出荷から選んだときも積むので、「戻る」で一覧に戻れる。URL に合わせて開いたときは積まない）
       const onPage = S.page === 'return'; // 待っている間に別の画面へ移っていたら、URL・フォーカスは変えない
-      if (onPage && prevNo !== s.shipment_no && prevNo.toUpperCase() !== asked.trim().toUpperCase()) history.pushState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
-      else if (onPage) history.replaceState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
+      if (onPage) setUrl('#/return?no=' + encodeURIComponent(s.shipment_no), !fromUrl);
       $('rtShipNo').value = s.shipment_no; // 一部だけ入力された番号は、見つかった正式な番号に置き換える（下書きの保存・復元を合わせるため）
       if (!keepMsg && onPage) focusTo($('rtShipment').querySelector('.card-sub'));
     } catch (err) {
       $('rtShipment').innerHTML = '';
-      if (S.page === 'return') history.replaceState(null, '', '#/return');
+      if (S.page === 'return') setUrl('#/return', false);
       await loadReturnRecent().catch(() => {}); // 見つからないときは最近の出荷から選べるようにする
       alertBox('rtFindMsg', /一覧から選んで/.test(err.message) ? err.message : err.message + '\n出荷番号を確かめるか、下の「最近の出荷」から選んでください。', 'ng');
     }
@@ -1340,13 +1355,13 @@ async function findShipmentForReturn(e, keepMsg) {
 
 /** ロット追跡：最近入荷したロットをすぐ選べるようにする */
 async function loadTraceRecent() {
+  // URL のとおりに表示する（「戻る」・再読み込み・他の画面からの移動）。表示中でも最新の状態で検索し直す
   const q = (location.hash.match(/[?&]q=([^&]+)/) || [])[1];
-  if (q && !$('tlBody').querySelector('.lot-card') && !$('tlQuery').value.trim()) {
-    $('tlQuery').value = decodeURIComponent(q); await searchLot({ preventDefault() {}, submitter: null });
+  if (q) {
+    $('tlQuery').value = decodeURIComponent(q); $('tlQuery').removeAttribute('aria-invalid');
+    await searchLot({ preventDefault() {}, submitter: null }, true);
     if ($('tlBody').querySelector('.lot-card')) return;
-  }
-  // 結果を表示中なら最新の状態で検索し直す（返品・回収・処分で数量が変わっている場合があるため）
-  if ($('tlBody').querySelector('.lot-card') && $('tlQuery').value.trim()) { await searchLot({ preventDefault() {}, submitter: null }); return; }
+  } else { $('tlBody').innerHTML = ''; $('tlQuery').value = ''; }
   const lots = (await api('getLots', [])).sort((a, b) => String(b.received_on).localeCompare(String(a.received_on)) || b.id - a.id).slice(0, 8);
   if ($('tlBody').querySelector('.lot-card')) return; // 読み込み中に検索された
   $('tlRecent').innerHTML = lots.length ? `<h3 class="section-title">最近のロット</h3><div class="recent-chips">${lots.map((l) =>
@@ -1381,7 +1396,7 @@ async function loadReturnRecent() {
   const fromUrl = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
   if (fromUrl && (!$('rtShipment').innerHTML || decodeURIComponent(fromUrl) !== $('rtShipNo').value.trim().toUpperCase())) {
     $('rtShipNo').value = decodeURIComponent(fromUrl);
-    await findShipmentForReturn(null, false);
+    await findShipmentForReturn(null, false, true);
     try { // 再読み込み前の入力途中の内容があれば戻す
       const draft = JSON.parse(sessionStorage.getItem('exo-return-draft') || 'null');
       if (draft && draft.user === S.user && draft.no === $('rtShipNo').value.trim().toUpperCase()) restoreReturnForm(draft.d);
@@ -1389,13 +1404,16 @@ async function loadReturnRecent() {
     return;
   }
   // 表示中の出荷があれば最新の状態で出し直す（回収などでロットの状態が変わっている場合があるため）
-  if ($('rtShipment').innerHTML && $('rtShipNo').value.trim()) {
+  if (fromUrl) {
     const saved = captureReturnForm();
     alertBox('rtFindMsg', '');
-    await findShipmentForReturn(null, false);
+    await findShipmentForReturn(null, false, true);
     restoreReturnForm(saved); // 入力途中だった明細は、まだ返品できるなら選び直して入力内容も戻す
     return;
   }
+  // URL に出荷番号が無い（「戻る」で一覧に戻った）ときは、出荷の表示を閉じて最近の出荷を出す
+  // （入力途中の内容は下書きに残っているので、「進む」で戻せる）
+  if ($('rtShipment').innerHTML) { $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null; $('rtShipNo').value = ''; alertBox('rtMsg', ''); }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
   $('rtRecent').innerHTML = `<h3 class="section-title">最近の出荷</h3>` + table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '', cls: 'actions' }],
     list.map((s) => ({ cells: [html(mono(s.shipment_no) + `<div class="card-sub">${esc(s.lines.map((l) => l.product + " ×" + l.quantity).join("、"))}</div>`), s.shipped_on, s.customer,
@@ -1467,7 +1485,7 @@ async function submitReturn(e) {
         (r.recall ? goBtn('recall', '回収案件を開く') : ''));
       $('rtReason').value = '';
       try { sessionStorage.removeItem('exo-return-draft'); } catch (e2) { /* 何もしない */ }
-      await findShipmentForReturn(null, true);
+      await findShipmentForReturn(null, true, true);
       $('rtFindMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       focusTo($('rtFindMsg').firstElementChild);
     } catch (err) {
@@ -1475,7 +1493,7 @@ async function submitReturn(e) {
       const avail = (err.message.match(/返品可能数（(\d+)）/) || [])[1];
       if (/取消/.test(err.message) || (avail !== undefined && Number(avail) !== Number($('rtQty').max))) { // 他の利用者の操作で出荷の状態が変わっている
         const saved = captureReturnForm();
-        await findShipmentForReturn(null, true);
+        await findShipmentForReturn(null, true, true);
         restoreReturnForm(saved);
         alertBox('rtFindMsg', err.message + '\n最新の出荷内容を表示しました。', 'ng');
       } else if (/返品数量|返品可能数/.test(err.message)) {
@@ -1614,7 +1632,7 @@ async function submitDispose(e) {
 // ======================================================================
 const MOVE_LABEL = { RECEIPT: '入荷', SHIPMENT: '出荷', CANCEL: '出荷取消', RETURN: '返品受入', TRANSFER_IN: '移動入', TRANSFER_OUT: '移動出', DISPOSE: '廃棄', ADJUST: '調整', SUPPLIER_RETURN: '仕入先返品' };
 
-async function searchLot(e) {
+async function searchLot(e, fromUrl) {
   e.preventDefault();
   if (!$('tlQuery').value.trim()) {
     $('tlQuery').setAttribute('aria-invalid', 'true');
@@ -1624,12 +1642,12 @@ async function searchLot(e) {
   }
   await busy(e.submitter, async () => {
     try {
-      const lots = await api('traceLot', $('tlQuery').value);
-      if (S.page === 'traceLot') { // 待っている間に別の画面へ移っていたら、URL は変えない
-        // 再読み込みしても同じ検索を出せるように URL に残す。別のロットに切り替えたら履歴を積む（「戻る」で前のロットへ）
-        const prevQ = (location.hash.match(/[?&]q=([^&]+)/) || [])[1], newHash = '#/traceLot?q=' + encodeURIComponent($('tlQuery').value.trim());
-        if (prevQ && decodeURIComponent(prevQ) !== $('tlQuery').value.trim()) history.pushState(null, '', newHash); else history.replaceState(null, '', newHash);
-      }
+      const asked = $('tlQuery').value;
+      const lots = await api('traceLot', asked);
+      if ($('tlQuery').value !== asked) return; // 待っている間に別の番号で検索された（古い結果で上書きしない）
+      // 再読み込みしても同じ検索を出せるように URL に残す。利用者が検索したときは履歴を積む（「戻る」で前の表示へ）
+      // 待っている間に別の画面へ移っていたら、URL は変えない
+      if (S.page === 'traceLot') setUrl('#/traceLot?q=' + encodeURIComponent($('tlQuery').value.trim()), !fromUrl);
       const fold = lots.length > 1; // 複数見つかったときは、見出しだけを並べて開いて見る
       if (lots.length) $('tlRecent').innerHTML = ''; // 見つからなかったときは「最近のロット」を残す
       $('tlBody').innerHTML = (lots.length ? `<p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retrace">${icon('refresh')}最新にする</button></p><p class="result-count" role="status">${lots.length}件見つかりました${lots.length >= 20 ? '（先頭20件。番号をもう少し詳しく入れると絞り込めます）' : ''}</p>` : '') + (lots.length ? lots.map((l) => {
@@ -1672,16 +1690,15 @@ const nowText = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo',
 
 /** 顧客追跡：表示中の結果があれば、開き直したときに最新の状態で出し直す */
 async function loadCustomerTrace() {
+  // URL のとおりに表示する（「戻る」・再読み込み）。表示中でも最新の状態で出し直す
   const qs = new URLSearchParams(location.hash.split('?')[1] || '');
-  if (qs.get('c') && !$('tcBody').querySelector('.card') && !$('tcCustomer').value) { // 再読み込み前の検索を出し直す
-    $('tcCustomer').value = qs.get('c'); $('tcFrom').value = qs.get('from') || ''; $('tcTo').value = qs.get('to') || '';
-    if ($('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null });
-    return;
-  }
-  if ($('tcBody').querySelector('.card') && $('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null });
+  $('tcCustomer').value = qs.get('c') || ''; $('tcFrom').value = qs.get('from') || ''; $('tcTo').value = qs.get('to') || '';
+  alertBox('tcMsg', '');
+  if ($('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null }, true);
+  else $('tcBody').innerHTML = '';
 }
 
-async function searchCustomer(e) {
+async function searchCustomer(e, fromUrl) {
   e.preventDefault();
   alertBox('tcMsg', '');
   ['tcFrom', 'tcTo'].forEach((id) => $(id).removeAttribute('aria-invalid'));
@@ -1694,7 +1711,9 @@ async function searchCustomer(e) {
   }
   await busy(e.submitter, async () => {
     try {
+      const key = () => [$('tcCustomer').value, $('tcFrom').value, $('tcTo').value].join('|'), asked = key();
       const r = await api('traceCustomer', $('tcCustomer').value, $('tcFrom').value, $('tcTo').value);
+      if (key() !== asked) return; // 待っている間に条件が変わった（古い結果で上書きしない）
       const c = r.customer;
       const total = r.rows.reduce((s, x) => s + x.net, 0);
       $('tcBody').innerHTML = `<div class="card"><div class="card-head"><div><h2 class="card-title">${esc(c.name)}</h2>
@@ -1711,7 +1730,7 @@ async function searchCustomer(e) {
         const qs = new URLSearchParams({ c: $('tcCustomer').value }); // 再読み込みしても同じ検索を出せるように
         if ($('tcFrom').value) qs.set('from', $('tcFrom').value);
         if ($('tcTo').value) qs.set('to', $('tcTo').value);
-        history.replaceState(null, '', '#/traceCustomer?' + qs);
+        setUrl('#/traceCustomer?' + qs, !fromUrl);
         $('tcBody').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         focusTo($('tcBody').querySelector('.card-title'));
       }
@@ -2122,7 +2141,16 @@ const ACTIONS = {
     S.inspectFilter = '';
     loadInspect().then(() => {
       const card = [...$('insBody').querySelectorAll('.lot-card')].find((c) => c.querySelector('.lot-no').textContent === S.insFocusLot);
-      if (card) { card.scrollIntoView({ block: 'center' }); focusTo(card); }
+      if (card) {
+        // 入力していた理由（と判定）を戻す
+        const r = S.insReason; S.insReason = null;
+        if (r && $('rs_' + r.id) && !$('rs_' + r.id).value) {
+          $('rs_' + r.id).value = r.reason;
+          const sel = $('to_' + r.id);
+          if (sel && r.to && [...sel.options].some((o) => o.value === r.to)) { sel.value = r.to; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
+        card.scrollIntoView({ block: 'center' }); focusTo(card);
+      }
     }).catch((err) => toast(err.message, 'ng'));
   },
   disposeAll: (el) => { $('dpQty').value = el.dataset.qty; $('dpQty').removeAttribute('aria-invalid'); $('disposeForm').dataset.dirty = '1'; },
@@ -2148,13 +2176,13 @@ const ACTIONS = {
   clearInvPreset: () => { S.invPreset = ''; renderInventory(); focusTo($('invFilter')); },
   newReturn: () => {
     $('rtShipNo').value = ''; $('rtShipment').innerHTML = ''; alertBox('rtFindMsg', ''); $('rtForm').hidden = true;
-    history.pushState(null, '', '#/return'); // 「戻る」で直前の出荷に戻れるように
+    setUrl('#/return', true); // 「戻る」で直前の出荷に戻れるように
     try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
     loadReturnRecent().then(() => focusTo($('rtShipNo'))).catch((err) => toast(err.message, 'ng'));
   },
   pickReturnShipment: (el) => { $('rtShipNo').value = el.dataset.no; $('rtShipNo').removeAttribute('aria-invalid'); alertBox('rtFindMsg', ''); findShipmentForReturn(null, false); },
   traceLotNo: (el) => {
-    if (el.matches('tr')) S.backFocus = { page: S.page, sel: `tr[data-action="traceLotNo"][data-lot="${CSS.escape(el.dataset.lot)}"]` }; go('traceLot'); $('tlQuery').value = el.dataset.lot; $('tlQuery').removeAttribute('aria-invalid'); $('tlSearch').requestSubmit(); },
+    if (el.matches('tr')) S.backFocus = { page: S.page, sel: `tr[data-action="traceLotNo"][data-lot="${CSS.escape(el.dataset.lot)}"]` }; goUrl('#/traceLot?q=' + encodeURIComponent(el.dataset.lot)); },
   confirmRules: async (el) => busy(el, async () => {
     try {
       S.cfg.prefs = await api('saveUserPrefs', { rulesChecked: true });
