@@ -679,7 +679,7 @@ function showPage(id) {
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
-  const withMasters = ['master', 'shipment', 'receipt', 'traceCustomer'].includes(id); // マスタを使う画面は最新にしてから表示
+  const withMasters = ['master', 'shipment', 'receipt', 'traceCustomer', 'return'].includes(id); // マスタを使う画面は最新にしてから表示
   if (id === 'receipt') loaders.receipt = async () => {};
   if (loaders[id]) {
     (withMasters ? freshMasters().then(() => { if (id === 'receipt' || id === 'shipment') renderPrereq(); return loaders[id](); }) : loaders[id]()).then(() => {
@@ -736,8 +736,14 @@ async function reloadMasters(opts = {}) {
   else if (keep.rcLoc && $('rcProduct').value === keep.rcProduct) { // 選んでいた保管場所が無効にされた：別の場所に黙って入れ替えない
     $('rcLoc').value = ''; $('rcLoc').setAttribute('aria-invalid', 'true');
     const l = old && (old.locations || []).find((x) => String(x.id) === keep.rcLoc);
-    gone.rcMsg.push({ name: l ? l.location_code + ' ' + l.name : '保管場所', loc: true,
-      self: !!opts.self && opts.self.key === 'locations' && String(opts.self.id) === keep.rcLoc });
+    // 原因を見分ける：商品の保管温度区分が変わったのか、保管場所そのものが変わったのか
+    const oldP = old && (old.products || []).find((x) => String(x.id) === keep.rcProduct);
+    const newP = S.M.products.find((x) => String(x.id) === keep.rcProduct);
+    const prodClass = oldP && newP && oldP.storage_class !== newP.storage_class;
+    gone.rcMsg.push({ name: l ? l.location_code + ' ' + l.name : '保管場所', loc: true, prodClass,
+      prodName: newP ? newP.product_code + ' ' + newP.name : '',
+      self: !!opts.self && (prodClass ? opts.self.key === 'products' && String(opts.self.id) === keep.rcProduct
+        : opts.self.key === 'locations' && String(opts.self.id) === keep.rcLoc) });
   }
   updateCustHint();
   renderPrereq();
@@ -760,7 +766,9 @@ async function reloadMasters(opts = {}) {
     const mine = items.filter((x) => x.self), others = items.filter((x) => !x.self);
     const part = (xs, who) => xs.length ? `${xs.map((x) => `「${x.name}」`).join('、')}は、${who}ため選択を外しました。` : '';
     // 保管場所は無効化のほか、温度区分・隔離の変更でも選べなくなる
-    const locPart = locs.length ? `保管場所${locs.map((x) => `「${x.name}」`).join('、')}は、${locs.some((x) => x.self) ? 'マスタの変更' : '他の利用者の変更（無効化・区分の変更）'}でこの商品に使えなくなったため選択を外しました。` : '';
+    const locPart = locs.map((x) => x.prodClass
+      ? `商品「${x.prodName}」の保管温度区分が${x.self ? 'マスタで' : '他の利用者により'}変更されたため、保管場所「${x.name}」の選択を外しました。`
+      : `保管場所「${x.name}」は、${x.self ? 'マスタの変更' : '他の利用者の変更（無効化・区分の変更）'}でこの商品に使えなくなったため選択を外しました。`).join('');
     alertBox(msg, part(mine, 'マスタで無効にした') + part(others, '他の利用者が無効にした') + locPart + '選び直してください。', 'warn', true);
     $(msg).dataset.gone = '1';
   };
@@ -1620,7 +1628,7 @@ function selectReturnLine(btn, quiet) {
   // 商品と同じ温度区分の保管場所だけを選べるようにする（1か所だけなら自動で選ぶ）
   const locs = active(S.M.locations).filter((l) => l.storage_class === btn.dataset.storage);
   const fill = (id, list) => {
-    $(id).innerHTML = options(list, 'id', (l) => l.name, list.length ? '選択してください' : '該当する保管場所がありません');
+    $(id).innerHTML = options(list, 'id', (l) => l.name + '（' + l.location_code + '）', list.length ? '選択してください' : '該当する保管場所がありません');
     if (list.length === 1) $(id).value = list[0].id;
   };
   fill('rtQLoc', locs.filter((l) => String(l.is_quarantine) === 'true'));

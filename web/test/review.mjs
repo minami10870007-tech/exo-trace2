@@ -438,6 +438,24 @@ for (const vp of VIEWPORTS) {
     if (/出荷/.test(left)) throw new Error('出荷の入力が残っている: ' + left);
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
+  await step('入荷：自分で商品の保管温度区分を変えたら、保管場所を外した理由を正しく伝える', async () => {
+    const pid = psql(server.sb.db, "insert into exo.m_product (product_code, name, storage_class, shelf_life_days, regulatory_class) values ('EXO-CLS', '区分テスト品', 'M80', 365, 'RESEARCH_USE') returning id").split('\n')[0];
+    try {
+      await page.evaluate(() => { S.mAt = 0; });
+      await page.click('#bottomNav [data-page="receipt"]').catch(async () => { await page.click('.sidebar [data-page="receipt"]'); }); await idle(page);
+      await page.selectOption('#rcProduct', pid); await page.waitForTimeout(200);
+      await page.selectOption('#rcLoc', { index: 1 });
+      psql(server.sb.db, `update exo.m_product set storage_class = 'COLD' where id = ${pid}`);
+      await page.evaluate((id) => reloadMasters({ self: { key: 'products', id } }), pid);
+      const t = await page.textContent('#rcMsg');
+      if (!/区分テスト品/.test(t) || !/マスタで/.test(t) || /他の利用者/.test(t)) throw new Error('理由が正しくない: ' + t);
+    } finally {
+      psql(server.sb.db, `update exo.m_product set is_active = false where id = ${pid}`);
+      await page.evaluate(() => { S.mAt = 0; document.getElementById('rcProduct').value = ''; document.getElementById('rcLoc').value = ''; alertBox('rcMsg', ''); });
+      await page.evaluate(() => reloadMasters());
+      await page.evaluate(() => { alertBox('rcMsg', ''); document.querySelectorAll('#receiptForm [aria-invalid]').forEach((x) => x.removeAttribute('aria-invalid')); });
+    }
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
