@@ -396,12 +396,12 @@ for (const vp of VIEWPORTS) {
     await page.goto(fresh.url + '/');
     await page.fill('#loginEmail', SECOND_USER.email); await page.fill('#loginPassword', SECOND_USER.password);
     await page.click('#loginForm button[type="submit"]'); await page.waitForSelector('#guideDialog[open]');
-    if (!/ステップ 1 \/ 9/.test(await page.textContent('#guideCount'))) throw new Error(await page.textContent('#guideCount'));
+    if (!/はじめに/.test(await page.textContent('#guideCount'))) throw new Error(await page.textContent('#guideCount'));
     if (!(await page.isHidden('#guidePrev'))) throw new Error('最初のステップで「戻る」が出ている');
   });
   await step('ガイド：キーボードで前後に移動', async () => {
-    await page.keyboard.press('ArrowRight'); await waitText('#guideCount', /ステップ 2 /);
-    await page.keyboard.press('ArrowLeft'); await waitText('#guideCount', /ステップ 1 /);
+    await page.keyboard.press('ArrowRight'); await waitText('#guideCount', /準備 1 \/ 7/);
+    await page.keyboard.press('ArrowLeft'); await waitText('#guideCount', /はじめに/);
     await page.click('#guideNext');
     if (!/まだ登録がありません/.test(await page.textContent('#guideStatus'))) throw new Error('未完了の表示がない');
   });
@@ -411,13 +411,28 @@ for (const vp of VIEWPORTS) {
     if ((await page.getAttribute('#msTabs [data-table="m_supplier"]', 'aria-selected')) !== 'true') throw new Error('仕入先タブが開かない');
     await page.click('#msNew'); await page.fill('#mf_supplier_code', 'S100'); await page.fill('#mf_name', 'ガイド仕入先');
     await page.click('#masterForm button[value="save"]'); await waitText('#toasts', /保存しました/);
+    await waitText('#guideResume', /完了しました/);
     await page.click('[data-action="guideResume"]'); await page.waitForSelector('#guideDialog[open]');
-    await waitText('#guideCount', /ステップ 3 /);
-    if (!/完了しました/.test(await page.textContent('#toasts'))) throw new Error('完了の通知がない');
+    await waitText('#guideCount', /準備 2 \/ 7/);
+    if (!/完了しました。次は「商品を登録する」/.test(await page.textContent('#guideStatus'))) throw new Error('完了の表示がない');
+  });
+  await step('入荷：前提が足りないときの案内・未入力の項目を示す', async () => {
+    await page.click('#guideSkip'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
+    await page.goto(fresh.url + '/#/receipt'); await idle(page);
+    if (!/先に 商品 を/.test(await page.textContent('#rcPre'))) throw new Error('前提の案内: ' + (await page.textContent('#rcPre')));
+    await page.click('#receiptForm button[type="submit"]');
+    const t = await page.textContent('#rcMsg'); if (!/未入力の項目があります：.*仕入先/.test(t)) throw new Error(t);
+    if ((await page.getAttribute('#rcProduct', 'aria-invalid')) !== 'true') throw new Error('未入力の欄に印がない');
+    if (!(await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('aria-invalid') === 'true'))) throw new Error('未入力の欄へ移動しない');
+  });
+  await step('ガイド：「?」は次にやるステップから開き、閉じるとフォーカスが戻る', async () => {
+    await page.click('.topbar [data-action="guideOpen"]'); await page.waitForSelector('#guideDialog[open]');
+    if (!/準備 2 \/ 7/.test(await page.textContent('#guideCount'))) throw new Error(await page.textContent('#guideCount'));
+    await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
+    if (!(await page.evaluate(() => document.activeElement.matches('.topbar [data-action="guideOpen"]')))) throw new Error('フォーカスが戻らない');
   });
   await step('ガイド：閉じたら次回ログインでは自動表示しない', async () => {
-    await page.click('#guideSkip'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(300);
     await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]'); await page.waitForSelector('#login:not([hidden])');
     await page.fill('#loginPassword', SECOND_USER.password); await page.click('#loginForm button[type="submit"]');
     await page.waitForSelector('#app:not([hidden])'); await idle(page); await page.waitForTimeout(300);
@@ -425,8 +440,8 @@ for (const vp of VIEWPORTS) {
   });
   await step('ダッシュボード「はじめにやること」：進み具合・手順を見る・非表示', async () => {
     await page.goto(fresh.url + '/#/dashboard'); await idle(page);
-    const t = await page.textContent('.setup-card'); if (!/1 \/ 6 完了/.test(t)) throw new Error(t.slice(0, 80));
-    await page.click('.setup-card [data-action="guideStep"]'); await waitText('#guideCount', /ステップ 3 /);
+    const t = await page.textContent('.setup-card'); if (!/1 \/ 7 完了/.test(t)) throw new Error(t.slice(0, 80));
+    await page.click('.setup-card .next [data-action="guideStep"]'); await waitText('#guideCount', /準備 2 \/ 7/);
     await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('guideDialog').open);
     await page.click('[data-action="hideSetup"]'); await waitText('#toasts', /非表示/);
     if (await page.$('.setup-card')) throw new Error('非表示にならない');

@@ -687,7 +687,9 @@ language sql stable set search_path = '' as $$
     'customers', exists (select 1 from exo.m_customer where is_active),
     'lots', exists (select 1 from exo.t_lot),
     'released', exists (select 1 from exo.t_lot where inspected_at is not null),
-    'shipments', exists (select 1 from exo.t_shipment))
+    'shipments', exists (select 1 from exo.t_shipment),
+    -- 販売可否ルールは「誰かが確認した」と記録したら完了（チームで1回）
+    'rules', exists (select 1 from exo.app_user where is_active and coalesce((prefs ->> 'rulesChecked')::boolean, false)))
 $$;
 
 -- 更新版を貼り直したときに戻り値の型が変わっても置き換えられるよう、いったん削除して作り直す
@@ -720,7 +722,7 @@ begin
   return exo.setup_status();
 end $$;
 
-/** 利用者ごとの画面設定を保存する。p = { guideDone: true, checklistHidden: true } */
+/** 利用者ごとの画面設定を保存する。p = { guideDone, checklistHidden, rulesChecked }（true/false） */
 create or replace function public.save_user_prefs(p jsonb default '{}') returns jsonb
 language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -728,7 +730,7 @@ declare
   v_set jsonb := '{}';
   k text;
 begin
-  foreach k in array array['guideDone', 'checklistHidden'] loop
+  foreach k in array array['guideDone', 'checklistHidden', 'rulesChecked'] loop
     if p ? k then v_set := v_set || jsonb_build_object(k, exo.j_bool(p, k)); end if;
   end loop;
   update exo.app_user set prefs = prefs || v_set where email = v_user;

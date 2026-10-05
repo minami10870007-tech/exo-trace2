@@ -39,7 +39,7 @@ export async function startServer({ port = 8888, seed = true, db = 'exo_web_test
   const sb = await startSupabase({ db, users: [{ ...DEMO_USER, allowed: true }, { ...SECOND_USER, allowed: true }, { ...OUTSIDER, allowed: false }] });
   if (seed) await seedData(sb);
   // 画面レビューでガイドが毎回開かないよう、サンプルデータ入りのときはガイドを見た状態にする（未設定の人の確認は seed=false で行う）
-  if (seed && guideDone) sb.sql(`update exo.app_user set prefs = prefs || '{"guideDone": true}'`);
+  if (seed && guideDone) sb.sql(`update exo.app_user set prefs = prefs || '{"guideDone": true, "rulesChecked": true}'`);
 
   const configHandler = (await import(pathToFileURL(join(repo, 'netlify', 'functions', 'config.mjs')).href)).default;
   // 本番の CSP は https://*.supabase.co への接続だけを許可する。ローカルの Supabase に向けて書き換える
@@ -96,9 +96,9 @@ export async function seedData(sb) {
   const lots = await G.get_lots({ statuses: [] });
   const lot = (no) => lots.find((l) => l.supplier_lot_no === no);
   for (const n of ['BS-2409-A17', 'BS-2405-C02', 'EXL-77812', 'EXL-RS-0042']) await G.change_lot_status({ lotId: lot(n).id, to: 'RELEASED', coaConfirmed: true });
-  await G.create_shipment({ customerId: c1.id, shippedOn: '2026-10-01', lines: [{ productId: pA.id, quantity: 6 }, { productId: pB.id, quantity: 2 }] });
-  await G.create_shipment({ customerId: c2.id, shippedOn: '2026-10-02', lines: [{ productId: pA.id, quantity: 10 }] });
-  await G.create_shipment({ customerId: c3.id, shippedOn: '2026-10-03', note: '月次定期', lines: [{ productId: pA.id, quantity: 8 }, { productId: pB.id, quantity: 3 }] });
+  await G.create_shipment({ customerId: c1.id, shippedOn: '2026-10-04', lines: [{ productId: pA.id, quantity: 6 }, { productId: pB.id, quantity: 2 }] });
+  await G.create_shipment({ customerId: c2.id, shippedOn: '2026-10-04', lines: [{ productId: pA.id, quantity: 10 }] });
+  await G.create_shipment({ customerId: c3.id, shippedOn: '2026-10-04', note: '月次定期', lines: [{ productId: pA.id, quantity: 8 }, { productId: pB.id, quantity: 3 }] });
   const recall = await G.create_recall({ title: '粒子濃度の規格外（再試験）', reason: 'COA再試験で粒子濃度が規格下限を下回ったため自主回収', severity: 'II', lotIds: [lot('EXL-77812').id] });
   const t = recall.targets.find((x) => x.shipped_qty > 0);
   if (t) await G.update_recall_target({ targetId: t.id, contactedOn: '2026-10-04', contactMethod: '電話', status: 'CONTACTED' });

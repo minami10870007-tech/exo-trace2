@@ -198,7 +198,9 @@ try {
   const tA2 = rv.targets.find((t) => t.customer === 'サロンA');
   ok(tA2.shipped_qty === 0 && tA2.status === 'CLOSED', '出荷取消で回収対象を自動クローズ');
   ok((await G.reextract_recall({ recallId: rc.id })).targets.length === 2, '再抽出（冪等）');
-  ok(Object.values(await G.get_setup()).every(Boolean), '初期設定〜初回出荷まで完了');
+  ok(Object.entries(await G.get_setup()).every(([k, v]) => v || k === 'rules'), '初期設定〜初回出荷まで完了（販売可否ルール以外）');
+  await G.save_user_prefs({ rulesChecked: true });
+  ok((await G.get_setup()).rules === true, '販売可否ルールの確認を記録');
   const dash = await G.get_dashboard();
   ok(dash.recalls.length === 1 && dash.recalls[0].recall_no === 'RCL-2026-001', 'ダッシュボード：対応中の回収');
   const closed = await G.close_recall({ recallId: rc.id });

@@ -45,10 +45,12 @@
   <form class="login-card" id="loginForm" novalidate>
     <div class="brand brand-lg"><img src="/icon.svg" alt="" width="40" height="40"><div><b>EXO-TRACE</b><span>エクソソーム仕入・販売トレーサビリティ</span></div></div>
     <div class="field"><label for="loginEmail">メールアドレス</label><input id="loginEmail" type="email" autocomplete="username" inputmode="email" required></div>
-    <div class="field"><label for="loginPassword">パスワード</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="loginPassword">パスワード</label>
+      <div class="pw-wrap"><input id="loginPassword" type="password" autocomplete="current-password" required><button class="pw-toggle" type="button" data-action="togglePw" aria-controls="loginPassword" aria-pressed="false">表示</button></div></div>
     <div id="loginMsg" role="alert"></div>
     <button class="btn btn-primary btn-block" type="submit">ログイン</button>
     <button class="btn btn-secondary btn-block" type="button" id="retryBtn" data-action="retry" hidden>再接続する</button>
+    <p class="login-help">パスワードを忘れた場合は、管理者に再設定を依頼してください。</p>
   </form>
 </div>
 
@@ -74,8 +76,17 @@
 
   <main class="main" id="main" tabindex="-1">
 
+    <!-- ガイドの途中で画面を開いたときの「ガイドに戻る」 -->
+    <div class="guide-resume" id="guideResume" role="region" aria-label="使い方ガイド" hidden>
+      <svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg>
+      <span class="guide-resume-text" id="guideResumeText"></span>
+      <button class="btn btn-primary btn-sm" type="button" data-action="guideResume" id="guideResumeBtn">ガイドに戻る</button>
+      <button class="icon-btn" type="button" data-action="guideResumeClose" aria-label="ガイドの案内を閉じる"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+
     <section class="page" id="page-dashboard" aria-labelledby="pageTitle">
       <div class="kpis" id="dashKpis"></div>
+      <div id="dashSetup"></div>
       <div class="dash-grid" id="dashBody"></div>
     </section>
 
@@ -83,6 +94,7 @@
       <form class="card" id="receiptForm" novalidate>
         <h2 class="card-title">入荷登録</h2>
         <p class="card-sub">入荷したロットは「検品待ち」になり、QAの合格判定後に出荷できます。</p>
+        <div id="rcPre"></div>
         <h3 class="section-title">商品とロット</h3>
         <div class="form-grid">
           <div class="field"><label for="rcSupplier">仕入先</label><select id="rcSupplier" required></select></div>
@@ -120,7 +132,8 @@
     <section class="page" id="page-shipment" hidden>
       <form class="card" id="shipForm" novalidate>
         <h2 class="card-title">出荷登録</h2>
-        <p class="card-sub">使用期限の近いロットから自動で割り当てます（合格済・最低出荷残期間以上・隔離保管場所以外）。</p>
+        <p class="card-sub">出荷できるロット（検品に合格し、使用期限に余裕があるもの）から、期限の近い順に自動で選びます。</p>
+        <div id="shPre"></div>
         <div class="form-grid">
           <div class="field"><label for="shCustomer">顧客</label><select id="shCustomer" required></select></div>
           <div class="field"><label for="shDate">出荷日</label><input id="shDate" type="date" required></div>
@@ -156,12 +169,12 @@
           <div class="field"><label for="rtDate">返品日</label><input id="rtDate" type="date" required></div>
           <div class="field"><label for="rtQLoc">受入保管場所（隔離）</label><select id="rtQLoc" required></select></div>
           <div class="field"><label for="rtDisp">処置</label><select id="rtDisp" required><option value="">選択してください</option><option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></div>
-          <div class="field" id="rtRLocWrap" hidden><label for="rtRLoc">戻し保管場所</label><select id="rtRLoc"></select></div>
+          <div class="field" id="rtRLocWrap" hidden><label for="rtRLoc">戻し保管場所</label><select id="rtRLoc" required></select></div>
           <div class="field span-full"><label for="rtReason">返品理由</label><textarea id="rtReason" rows="3" required maxlength="1000"></textarea></div>
         </div>
         <p class="note">回収中のロットは自動的に回収品として登録され、処置は廃棄のみになります。</p>
         <div id="rtMsg"></div>
-        <div class="form-actions"><button class="btn btn-secondary" type="button" data-action="cancelReturn">キャンセル</button><button class="btn btn-primary" type="submit">返品を登録</button></div>
+        <div class="form-actions sticky-actions"><button class="btn btn-secondary" type="button" data-action="cancelReturn">キャンセル</button><button class="btn btn-primary" type="submit">返品を登録</button></div>
       </form>
     </section>
 
@@ -269,7 +282,7 @@
   <div class="guide-wrap">
     <div class="guide-top">
       <span class="guide-count" id="guideCount"></span>
-      <button class="btn btn-ghost btn-sm" type="button" data-action="guideClose" id="guideSkip">あとで見る</button>
+      <button class="btn btn-ghost btn-sm" type="button" data-action="guideClose" id="guideSkip">閉じる</button>
     </div>
     <div class="guide-progress" aria-hidden="true"><i id="guideBar"></i></div>
     <div class="guide-icon" id="guideIcon" aria-hidden="true"></div>
@@ -282,14 +295,9 @@
       <ol class="guide-dots" id="guideDots" aria-hidden="true"></ol>
       <button class="btn btn-primary" type="button" data-action="guideNext" id="guideNext">次へ</button>
     </div>
+    <p class="guide-note">右上の「?」やダッシュボードの「はじめにやること」から、いつでも続きを再開できます。</p>
   </div>
 </dialog>
-
-<!-- ガイドの途中で画面を開いたときの「続きに戻る」 -->
-<div class="guide-resume" id="guideResume" hidden>
-  <button class="guide-resume-main" type="button" data-action="guideResume"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg><span id="guideResumeText"></span></button>
-  <button class="icon-btn" type="button" data-action="guideResumeClose" aria-label="ガイドを閉じる"><svg class="ic"><use href="#i-x"/></svg></button>
-</div>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">このアプリを利用するには JavaScript を有効にしてください。</p></noscript>

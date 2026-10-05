@@ -186,6 +186,31 @@ function alertBox(id, text, kind) {
   $(id).innerHTML = text ? `<div class="alert alert-${kind || 'ok'}" role="${kind === 'ng' ? 'alert' : 'status'}">${esc(text)}</div>` : '';
 }
 
+/** ラベルの文字（「任意」などの補足を除く） */
+function labelOf(el) {
+  const lab = el.id && document.querySelector(`label[for="${el.id}"]`);
+  if (!lab) return el.getAttribute('aria-label') || '';
+  return [...lab.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+}
+
+/**
+ * 必須項目の入力チェック。未入力の欄に印を付けて最初の欄へ移動し、何が足りないかを表示する。
+ * extra: 追加で未入力として扱う要素。問題がなければ true
+ */
+function checkRequired(container, msgId, extra) {
+  const missing = [];
+  container.querySelectorAll('[required]').forEach((el) => {
+    if (el.closest('[hidden]') || el.disabled) return;
+    if (String(el.value || '').trim()) el.removeAttribute('aria-invalid'); else missing.push(el);
+  });
+  (extra || []).forEach((el) => { if (!missing.includes(el)) missing.push(el); });
+  if (!missing.length) return true;
+  missing.forEach((el) => el.setAttribute('aria-invalid', 'true'));
+  alertBox(msgId, '未入力の項目があります：' + [...new Set(missing.map(labelOf))].join('、'), 'ng');
+  missing[0].focus();
+  return false;
+}
+
 function toast(text, kind, action) {
   const el = document.createElement('div');
   el.className = 'toast' + (kind === 'ng' ? ' toast-ng' : '');
@@ -300,7 +325,7 @@ function showLogin(message, canRetry) {
   closeSheet();
   if ($('dialog').open) $('dialog').close();
   if ($('masterDialog').open) $('masterDialog').close();
-  if ($('guideDialog').open) { $('guideDialog').removeEventListener('close', markGuideDone); $('guideDialog').close(); $('guideDialog').addEventListener('close', markGuideDone); }
+  if ($('guideDialog').open) { G_STATE.navigating = true; $('guideDialog').removeEventListener('close', onGuideClosed); $('guideDialog').close(); $('guideDialog').addEventListener('close', onGuideClosed); }
   $('app').hidden = true;
   $('login').hidden = false;
   alertBox('loginMsg', message || '', 'ng');
@@ -346,9 +371,14 @@ async function login(e) {
       if (!S.sb) await loadConfig();
       const email = $('loginEmail').value.trim();
       const password = $('loginPassword').value;
-      if (!email || !password) throw new Error('メールアドレスとパスワードを入力してください。');
+      if (!checkRequired($('loginForm'), 'loginMsg')) return;
       const { res, data } = await sbFetch('/auth/v1/token?grant_type=password', { email, password });
-      if (!res.ok || !data.access_token) throw new Error(authMessage(res, data));
+      if (!res.ok || !data.access_token) {
+        const msg = authMessage(res, data);
+        if (/正しくありません/.test(msg)) { $('loginPassword').setAttribute('aria-invalid', 'true'); $('loginPassword').select(); }
+        if (/形式/.test(msg)) { $('loginEmail').setAttribute('aria-invalid', 'true'); $('loginEmail').focus(); }
+        throw new Error(msg);
+      }
       const old = S.sess;
       if (old) sbFetch('/auth/v1/logout?scope=local', undefined, old.access_token).catch(() => {}); // 前のセッションは無効化
       if (S.user && S.user.toLowerCase() !== email.toLowerCase()) clearScreens();
@@ -384,6 +414,7 @@ async function boot() {
     route();
     // 初めてログインした人には、ステップ形式のガイドを自動で表示する
     if (!(S.cfg.prefs && S.cfg.prefs.guideDone)) openGuide(0);
+    G_STATE.opener = null;
   } catch (err) {
     if (S.sess) toast(err.message, 'ng');
   }
@@ -456,6 +487,7 @@ function showPage(id) {
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadRecentShipments, inventory: loadInventory,
     recall: loadRecalls, master: loadMaster };
   if (loaders[id]) loaders[id]().catch((e) => toast(e.message, 'ng'));
+  if (id === 'receipt' || id === 'shipment') renderPrereq();
 }
 
 function go(id) {
@@ -482,6 +514,7 @@ async function reloadMasters() {
   $('shCustomer').innerHTML = options(active(S.M.customers), 'id', (r) => r.customer_code + '　' + r.name + '（' + code('customer_type', r.customer_type) + '）', '選択してください');
   $('tcCustomer').innerHTML = options(S.M.customers, 'id', (r) => r.customer_code + '　' + r.name, '選択してください');
   fillReceiptLocations();
+  renderPrereq();
   document.querySelectorAll('.slProd').forEach((sel) => {
     const v = sel.value;
     sel.innerHTML = options(prod, 'id', (r) => r.product_code + '　' + r.name, '商品を選択');
@@ -495,52 +528,79 @@ async function reloadMasters() {
 // ======================================================================
 const GUIDE = [
   { icon: 'home', title: 'EXO-TRACE へようこそ',
-    body: '仕入れたエクソソームを「ロット」ごとに管理し、どのロットを・いつ・どのお客様に販売したかを、すぐに調べられるようにするシステムです。\n\nこのガイドでは、使い始めるまでの準備を順番にご案内します（目安 5〜10分）。各ステップの「この画面を開く」で実際の画面に移動できます。' },
-  { key: 'suppliers', icon: 'gear', page: 'master', table: 'm_supplier', title: '仕入先を登録する',
+    body: '仕入れたエクソソームを「ロット」ごとに管理し、どのロットを・いつ・どのお客様に販売したかを、すぐに調べられるようにするシステムです。\n\nこのガイドでは、使い始めるまでの準備（7つ）を順番にご案内します。目安は 10分ほどです。各ステップの「画面を開く」で、実際の画面に移動できます。' },
+  { key: 'suppliers', icon: 'gear', page: 'master', table: 'm_supplier', title: '仕入先を登録する', short: '仕入先の登録',
     body: '「マスタ設定」の「仕入先」タブで「新規登録」を押し、エクソソームの仕入先（メーカー・卸）を登録します。\n\nコードは英数字とハイフンで付けます（例：S001）。' },
-  { key: 'products', icon: 'box', page: 'master', table: 'm_product', title: '商品を登録する',
+  { key: 'products', icon: 'box', page: 'master', table: 'm_product', title: '商品を登録する', short: '商品の登録',
     body: '「商品」タブで、取り扱う商品を登録します。\n\n・保管温度区分（-80℃など）：入庫できる保管場所が決まります\n・有効期間（日）：製造日から使用期限を自動計算します\n・規制区分：販売できる顧客の種類が決まります' },
-  { key: 'customers', icon: 'user', page: 'master', table: 'm_customer', title: '顧客を登録する',
+  { key: 'customers', icon: 'user', page: 'master', table: 'm_customer', title: '顧客を登録する', short: '顧客の登録',
     body: '「顧客」タブで販売先を登録します。\n\n医療機関の場合は医療機関コードが必須です。メールアドレス・電話番号は、回収が必要になったときの連絡先として使います。' },
-  { icon: 'check', page: 'master', table: 'rules', title: '販売できる組合せを確認する',
-    body: '「販売可否ルール」タブで、商品の規制区分 × 顧客区分ごとに「出荷してよいか」を決めます。\n\n最初の設定は仮のものです。法令上の区分を確認したうえで、必ず見直してください。' },
-  { key: 'lots', icon: 'inbox', page: 'receipt', title: '入荷を登録する',
+  { key: 'rules', icon: 'check', page: 'master', table: 'rules', title: '販売できる組合せを確認する', short: '販売可否ルールの確認',
+    body: '「販売可否ルール」タブで、商品の規制区分 × 顧客区分ごとに「出荷してよいか」を決めます。\n\n最初の設定は仮のものです。法令上の区分を確認して見直したら、下のチェックを入れてください。' },
+  { key: 'lots', icon: 'inbox', page: 'receipt', title: '入荷を登録する', short: '入荷の登録',
     body: '商品が届いたら「入荷登録」で、仕入先ロット番号・使用期限（または製造日）・数量を入力します。\n\n社内ロット番号が自動で付き、ロットは「検品待ち」になります。' },
-  { key: 'released', icon: 'check', page: 'inspect', title: '検品して合格にする',
+  { key: 'released', icon: 'check', page: 'inspect', title: '検品して合格にする', short: '検品',
     body: '「検品・ロット」で COA（試験成績書）を確認し、判定を「合格」にします。\n\n合格したロットだけが出荷できます。問題があれば「保留」「不合格」にします。' },
-  { key: 'shipments', icon: 'truck', page: 'shipment', title: '出荷を登録する',
+  { key: 'shipments', icon: 'truck', page: 'shipment', title: '出荷を登録する', short: '出荷の登録',
     body: '「出荷登録」で顧客と商品・数量を選びます。使用期限の近いロットから自動で割り当てるので、ロットを選ぶ必要はありません。\n\n出荷すると「どのロットを誰に売ったか」が記録されます。' },
-  { icon: 'search', page: 'traceLot', title: '準備はこれで完了です',
+  { icon: 'search', page: 'traceLot', title: '準備が整いました',
     body: '日々の業務は「入荷 → 検品 → 出荷」の繰り返しです。\n\n・ロット追跡：ロット番号から販売先と連絡先を一覧できます\n・回収管理：問題のあるロットの対象顧客を自動で抽出します\n\nこのガイドは、画面右上の「?」からいつでも開けます。' },
 ];
-const SETUP_KEYS = GUIDE.filter((g) => g.key).map((g) => g.key);
-const G_STATE = { step: 0 };
+const SETUP_STEPS = GUIDE.map((g, i) => ({ g, i })).filter((x) => x.g.key);
+const LAST = GUIDE.length - 1;
+const G_STATE = { step: 0, justDone: '', opener: null, navigating: false };
 
-function setupDone(setup) { return SETUP_KEYS.every((k) => setup && setup[k]); }
+/** 準備の進み具合（サーバーの登録状況。販売可否ルールは誰かが「確認した」と記録したら完了） */
+function setupState() {
+  return (S.cfg && S.cfg.setup) || {};
+}
+function setupDone(st) { return SETUP_STEPS.every((x) => st[x.g.key]); }
+function firstTodo(st) { const x = SETUP_STEPS.find((y) => !st[y.g.key]); return x ? x.i : -1; }
 
 function renderGuide() {
-  const i = G_STATE.step, g = GUIDE[i], setup = (S.cfg && S.cfg.setup) || {};
-  const last = i === GUIDE.length - 1;
-  $('guideCount').textContent = `ステップ ${i + 1} / ${GUIDE.length}`;
-  $('guideBar').style.width = Math.round(((i + 1) / GUIDE.length) * 100) + '%';
-  $('guideIcon').innerHTML = icon(g.icon);
-  $('guideTitle').textContent = g.title;
-  $('guideBody').textContent = g.body;
-  $('guideStatus').innerHTML = g.key ? (setup[g.key]
-    ? `<span class="guide-state done">${icon('check')}このステップは完了しています</span>`
-    : `<span class="guide-state todo">${icon('flag')}まだ登録がありません</span>`)
-    : (i === 0 && setupDone(setup) ? `<span class="guide-state done">${icon('check')}準備はすべて完了しています</span>` : '');
+  const i = G_STATE.step, g = GUIDE[i], st = setupState();
+  const done = setupDone(st), todo = firstTodo(st);
+  const n = SETUP_STEPS.findIndex((x) => x.i === i);
+  const remaining = SETUP_STEPS.filter((x) => !st[x.g.key]);
+  $('guideCount').textContent = n >= 0 ? `準備 ${n + 1} / ${SETUP_STEPS.length}` : i === 0 ? 'はじめに' : 'まとめ';
+  $('guideBar').style.width = Math.round((SETUP_STEPS.filter((x) => st[x.g.key]).length / SETUP_STEPS.length) * 100) + '%';
+  $('guideIcon').innerHTML = icon(i === LAST && !done ? 'flag' : g.icon);
+  // 最後のステップは、準備が終わっているかで内容を変える
+  if (i === LAST && !done) {
+    $('guideTitle').textContent = `あと ${remaining.length} つの準備があります`;
+    $('guideBody').textContent = '次の準備が残っています。上から順に進めると、入荷から出荷までが使えるようになります。\n\n' + remaining.map((x) => '・' + x.g.title).join('\n');
+  } else {
+    $('guideTitle').textContent = g.title;
+    $('guideBody').textContent = g.body;
+  }
+  let status = G_STATE.justDone ? `<div class="guide-done-banner" role="status">${icon('check')}<span>${esc(G_STATE.justDone)}</span></div>` : '';
+  G_STATE.justDone = '';
+  if (g.key === 'rules') {
+    status += `<label class="check guide-rules"><input type="checkbox" id="guideRulesChk"${st.rules ? ' checked' : ''}><span>販売可否ルールを確認した</span></label>`;
+  } else if (g.key) {
+    status += st[g.key] ? `<span class="guide-state done">${icon('check')}このステップは完了しています</span>`
+      : `<span class="guide-state todo">${icon('flag')}まだ登録がありません</span>`;
+  } else if (i === 0 && done) {
+    status += `<span class="guide-state done">${icon('check')}準備はすべて完了しています</span>`;
+  }
+  $('guideStatus').innerHTML = status;
   const page = g.page && PAGES.find((p) => p.id === g.page);
-  $('guideGo').hidden = !page;
-  if (page) $('guideGo').textContent = `「${g.table === 'rules' ? '販売可否ルール' : page.label}」の画面を開く`;
+  $('guideGo').hidden = !page || (i === LAST && !done);
+  if (page) $('guideGo').textContent = `「${g.table === 'rules' ? '販売可否ルール' : g.table ? MASTER[g.table].label + 'の登録' : page.label}」の画面を開く`;
   $('guidePrev').hidden = i === 0;
-  $('guideNext').textContent = last ? 'はじめる' : i === 0 ? 'はじめる準備をする' : '次へ';
-  $('guideSkip').hidden = last;
-  $('guideDots').innerHTML = GUIDE.map((x, j) => `<li class="${j === i ? 'cur' : x.key && setup[x.key] ? 'done' : ''}"></li>`).join('');
+  $('guideNext').textContent = i === LAST ? (done ? 'はじめる' : `次の準備へ（${GUIDE[todo].short}）`)
+    : i === 0 ? (done ? '次へ' : todo > 1 ? `続きから（${GUIDE[todo].short}）` : 'はじめる') : '次へ';
+  $('guideNext').dataset.jump = i === LAST && !done ? String(todo) : i === 0 && !done && todo > 1 ? String(todo) : '';
+  $('guideSkip').hidden = i === LAST && done;
+  $('guideDots').innerHTML = GUIDE.map((x, j) => `<li class="${j === i ? 'cur' : x.key && st[x.key] ? 'done' : ''}"></li>`).join('');
 }
 
+/** ガイドを開く。step を省略すると、準備の途中なら次にやるステップから */
 function openGuide(step) {
-  G_STATE.step = Math.max(0, Math.min(GUIDE.length - 1, step || 0));
+  if (step === undefined) { const t = firstTodo(setupState()); step = t >= 0 ? t : 0; }
+  G_STATE.step = Math.max(0, Math.min(LAST, step));
+  if (!$('guideDialog').open) G_STATE.opener = document.activeElement;
+  G_STATE.navigating = false;
   $('guideResume').hidden = true;
   closeSheet();
   renderGuide();
@@ -548,53 +608,121 @@ function openGuide(step) {
   $('guideNext').focus();
 }
 
-/** ガイドを閉じる（見たことを記録し、次回から自動では開かない） */
 function closeGuide() {
   if ($('guideDialog').open) $('guideDialog').close();
 }
 
-function markGuideDone() {
-  if (!S.cfg || (S.cfg.prefs && S.cfg.prefs.guideDone)) return;
-  S.cfg.prefs = Object.assign({}, S.cfg.prefs, { guideDone: true });
-  api('saveUserPrefs', { guideDone: true }).catch(() => {});
+/** ガイドを閉じたとき：「見た」と記録し（次回から自動では開かない）、元の場所にフォーカスを戻す */
+function onGuideClosed() {
+  if (S.cfg && !(S.cfg.prefs && S.cfg.prefs.guideDone)) {
+    S.cfg.prefs = Object.assign({}, S.cfg.prefs, { guideDone: true });
+    api('saveUserPrefs', { guideDone: true }).catch(() => {});
+  }
+  if (G_STATE.navigating) return;
+  const o = G_STATE.opener;
+  (o && o.isConnected && o.offsetParent !== null ? o : $('main')).focus({ preventScroll: true });
 }
 
-/** ステップの画面を開き、画面下に「ガイドの続き」を出す */
+function guideNext() {
+  const jump = $('guideNext').dataset.jump;
+  if (jump) { G_STATE.step = Number(jump); renderGuide(); $('guideNext').focus(); return; }
+  if (G_STATE.step >= LAST) { closeGuide(); return; }
+  G_STATE.step++;
+  renderGuide();
+  $('guideNext').focus();
+}
+
+/** ステップの画面を開き、画面上部に「ガイドに戻る」を出す */
 function guideGo() {
   const g = GUIDE[G_STATE.step];
+  G_STATE.navigating = true;
   closeGuide();
   if (g.table) S.masterTable = g.table;
   go(g.page);
-  $('guideResumeText').textContent = `ガイドに戻る（ステップ ${G_STATE.step + 1} / ${GUIDE.length}）`;
+  setResume(false);
   $('guideResume').hidden = false;
+  $('main').focus({ preventScroll: true });
 }
 
-/** 「ガイドに戻る」：進み具合を取り直し、終わっていれば次のステップへ */
+function setResume(done) {
+  const g = GUIDE[G_STATE.step];
+  $('guideResume').classList.toggle('is-done', done);
+  $('guideResumeText').textContent = done ? `✓「${g.title}」が完了しました` : `ガイド：${g.title}`;
+  $('guideResumeBtn').textContent = done ? '次のステップへ' : 'ガイドに戻る';
+}
+
+/** 登録・判定・出荷などの後：ガイドの途中なら完了を確認して表示を更新する */
+async function guideAfterAction() {
+  if (!S.cfg) return;
+  try { S.cfg.setup = await api('getSetup'); } catch (e) { return; }
+  if ($('guideResume').hidden) return;
+  const g = GUIDE[G_STATE.step];
+  if (g.key && setupState()[g.key]) setResume(true);
+}
+
+/** 「ガイドに戻る」：終わっていれば完了を伝えて次のステップへ */
 async function guideResume(btn) {
   await busy(btn, async () => {
     try { S.cfg.setup = await api('getSetup'); } catch (e) { /* 取れなくてもガイドは開く */ }
     const g = GUIDE[G_STATE.step];
-    const next = g.key && S.cfg.setup && S.cfg.setup[g.key] && G_STATE.step < GUIDE.length - 1;
-    if (next) toast(`ステップ ${G_STATE.step + 1}「${g.title}」が完了しました`);
-    openGuide(G_STATE.step + (next ? 1 : 0));
+    const finished = g.key && setupState()[g.key];
+    if (finished) {
+      const next = firstTodo(setupState());
+      G_STATE.justDone = `「${g.title}」が完了しました。` + (next >= 0 ? `次は「${GUIDE[next].title}」です。` : 'これで準備はすべて完了です。');
+      openGuide(next >= 0 ? next : LAST);
+    } else {
+      openGuide(G_STATE.step);
+    }
   });
 }
 
+async function saveRulesChecked(chk) {
+  chk.disabled = true;
+  try {
+    S.cfg.prefs = await api('saveUserPrefs', { rulesChecked: chk.checked });
+    S.cfg.setup = await api('getSetup');
+    if (chk.checked) G_STATE.justDone = '販売可否ルールの確認を記録しました。';
+    renderGuide();
+  } catch (err) {
+    chk.checked = !chk.checked;
+    toast(err.message, 'ng');
+  } finally {
+    chk.disabled = false;
+  }
+}
+
 /** ダッシュボード「はじめにやること」 */
-function setupCard(setup) {
-  if (!setup || setupDone(setup) || (S.cfg.prefs && S.cfg.prefs.checklistHidden)) return '';
-  const steps = GUIDE.map((g, i) => ({ g, i })).filter((x) => x.g.key);
-  const done = steps.filter((x) => setup[x.g.key]).length;
-  const nextKey = (steps.find((x) => !setup[x.g.key]) || {}).g.key;
-  return `<section class="card span-full setup-card" aria-labelledby="setupTitle"><div class="card-head"><div>
-      <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${steps.length} 完了・上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
-    <div class="meter" aria-hidden="true"><i data-w="${Math.round((done / steps.length) * 100)}"></i></div>
-    <ol class="setup-list">${steps.map(({ g, i }, n) => `<li class="${setup[g.key] ? 'done' : g.key === nextKey ? 'next' : ''}">
-      <span class="setup-mark" aria-hidden="true">${setup[g.key] ? icon('check') : n + 1}</span>
-      <div class="grow"><div class="setup-t">${esc(g.title)}</div><div class="setup-s">${setup[g.key] ? '完了' : g.key === nextKey ? '次はここから' : '未完了'}</div></div>
-      ${setup[g.key] ? '' : `<button type="button" class="btn ${g.key === nextKey ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="guideStep" data-step="${i}" aria-label="${esc(g.title)}の手順を見る">手順を見る</button>`}</li>`).join('')}</ol>
-    <div class="setup-foot"><button type="button" class="btn btn-ghost btn-sm" data-action="hideSetup">このカードを非表示</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="guideOpen">ガイドを最初から見る</button></div></section>`;
+function setupCard() {
+  const st = setupState();
+  if (!S.cfg || setupDone(st) || (S.cfg.prefs && S.cfg.prefs.checklistHidden)) return '';
+  const done = SETUP_STEPS.filter((x) => st[x.g.key]).length;
+  const next = firstTodo(st);
+  return `<section class="card setup-card" aria-labelledby="setupTitle"><div class="card-head"><div>
+      <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${SETUP_STEPS.length} 完了・上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
+    <div class="meter" aria-hidden="true"><i data-w="${Math.round((done / SETUP_STEPS.length) * 100)}"></i></div>
+    <ol class="setup-list">${SETUP_STEPS.map(({ g, i }, n) => `<li class="${st[g.key] ? 'done' : i === next ? 'next' : ''}">
+      <span class="setup-mark" aria-hidden="true">${st[g.key] ? icon('check') : n + 1}</span>
+      <div class="grow"><div class="setup-t">${esc(g.title)}</div><div class="setup-s">${st[g.key] ? '完了' : i === next ? '次はここから' : '未完了'}</div></div>
+      ${st[g.key] ? '' : `<button type="button" class="btn ${i === next ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="guideStep" data-step="${i}" aria-label="${esc(g.title)}の手順を見る">手順を見る</button>`}</li>`).join('')}</ol>
+    <div class="setup-foot"><button type="button" class="btn btn-secondary btn-sm" data-action="guideStep" data-step="0">ガイドを最初から見る</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="hideSetup">このカードを非表示</button></div></section>`;
+}
+
+/** 入荷・出荷の画面：前提（マスタ・合格ロット）が足りないときの案内 */
+function renderPrereq() {
+  if (!S.M || !S.cfg) return;
+  const none = (rows) => !active(rows).length;
+  const need = (labels) => labels.filter(Boolean).join('・');
+  const box = (text, btns) => `<div class="alert alert-info prereq" role="status"><div class="alert-text">${esc(text)}<div class="alert-actions">${btns}</div></div></div>`;
+  const masterBtn = (table, label) => `<button type="button" class="btn btn-secondary btn-sm" data-action="goMaster" data-table="${table}">${esc(label)}を登録する</button>`;
+  const rcNeed = need([none(S.M.suppliers) && '仕入先', none(S.M.products) && '商品']);
+  $('rcPre').innerHTML = rcNeed ? box(`入荷を登録するには、先に ${rcNeed} を「マスタ設定」で登録してください。`,
+    (none(S.M.suppliers) ? masterBtn('m_supplier', '仕入先') : '') + (none(S.M.products) ? masterBtn('m_product', '商品') : '')) : '';
+  const shNeed = need([none(S.M.customers) && '顧客', none(S.M.products) && '商品']);
+  $('shPre').innerHTML = shNeed ? box(`出荷を登録するには、先に ${shNeed} を「マスタ設定」で登録してください。`,
+    (none(S.M.customers) ? masterBtn('m_customer', '顧客') : '') + (none(S.M.products) ? masterBtn('m_product', '商品') : ''))
+    : !setupState().released ? box('まだ検品で合格にしたロットがありません。入荷を登録し、「検品・ロット」で合格にすると出荷できます。',
+      '<button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="receipt">入荷登録へ</button><button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="inspect">検品へ</button>') : '';
 }
 
 // ======================================================================
@@ -624,7 +752,9 @@ async function loadDashboard() {
     (lc.mismatches.length > 5 ? '\nほか ' + (lc.mismatches.length - 5) + ' 件' : '') + '\n管理者に確認してください。</div>' : '';
   const stale = d.checkStale ? `<div class="alert alert-warn span-full" role="status">日次チェック（期限切れの判定・在庫の照合）が24時間以上実行されていません${lc ? `（最終 ${esc(lc.ran_at)}）` : ''}。\nSupabase の「Integrations」→「Cron」に exo-trace-daily-check があるか、管理者に確認を依頼してください。</div>` : '';
   if (S.cfg) S.cfg.setup = d.setup;
-  $('dashBody').innerHTML = mismatch + stale + setupCard(d.setup) +
+  $('dashSetup').innerHTML = setupCard();
+  $('dashSetup').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
+  $('dashBody').innerHTML = mismatch + stale +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
       d.lowStock.map((x) => ({ cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +
@@ -656,6 +786,7 @@ function autoExpiry() {
 
 async function submitReceipt(e) {
   e.preventDefault();
+  if (!checkRequired($('receiptForm'), 'rcMsg')) return;
   await busy(e.submitter, async () => {
     alertBox('rcMsg', '');
     try {
@@ -666,6 +797,7 @@ async function submitReceipt(e) {
       toast('入荷を登録しました（' + r.lotNo + '）');
       ['rcSupLot', 'rcMfg', 'rcExp', 'rcQty', 'rcPrice', 'rcTemp'].forEach((id) => { $(id).value = ''; });
       delete $('rcExp').dataset.manual;
+      guideAfterAction();
     } catch (err) {
       alertBox('rcMsg', err.message, 'ng');
     }
@@ -688,7 +820,8 @@ async function loadInspect() {
         <div class="field"><label for="to_${l.id}">判定</label><select id="to_${l.id}" class="insTo" data-id="${l.id}"><option value="">選択してください</option>${nexts.map((s) => `<option value="${s}">${esc(code('lot_status', s))}</option>`).join('')}</select></div>
         <div class="field"><label for="rs_${l.id}">理由 <span class="opt" id="rso_${l.id}">合格時は任意</span></label><input id="rs_${l.id}" class="insReason" data-id="${l.id}" autocomplete="off"></div>
         <label class="check" id="coaw_${l.id}" hidden><input type="checkbox" id="coa_${l.id}" class="insCoa" data-id="${l.id}"><span>COA（試験成績書）を確認した</span></label>
-        <button type="button" class="btn btn-primary" data-action="changeStatus" data-id="${l.id}" id="insBtn_${l.id}" disabled>判定を選択してください</button></div>` : '';
+        <div class="field-hint" id="insHint_${l.id}">判定を選択してください。</div>
+        <button type="button" class="btn btn-primary" data-action="changeStatus" data-id="${l.id}" id="insBtn_${l.id}" disabled aria-describedby="insHint_${l.id}">判定を登録</button></div>` : '';
     return `<article class="card lot-card"><div class="lot-head"><div><div class="lot-no">${esc(l.lot_no)}</div>
         <div class="card-sub">${joinNw([l.product, l.supplier])}</div></div>${badge(l.status, l.statusLabel)}</div>
       <dl class="lot-meta"><div><dt>仕入先ロット</dt><dd class="mono">${esc(l.supplier_lot_no)}</dd></div><div><dt>使用期限</dt><dd>${esc(l.expires_on)}</dd></div>
@@ -709,7 +842,8 @@ function updateInspectAction(id) {
   const ready = to && (to === 'RELEASED' ? coa : !!reason);
   btn.disabled = !ready;
   btn.className = 'btn ' + (to === 'REJECTED' ? 'btn-danger' : 'btn-primary');
-  btn.textContent = !to ? '判定を選択してください' : ready ? ACTION_LABEL[to] : (to === 'RELEASED' ? 'COAを確認してください' : '理由を入力してください');
+  btn.textContent = to ? ACTION_LABEL[to] : '判定を登録';
+  $('insHint_' + id).textContent = !to ? '判定を選択してください。' : ready ? '' : (to === 'RELEASED' ? 'COA（試験成績書）を確認したら、チェックを入れてください。' : '理由を入力してください。');
 }
 
 async function changeStatus(btn) {
@@ -719,6 +853,7 @@ async function changeStatus(btn) {
     try {
       const r = await api('changeLotStatus', { lotId: id, to: $('to_' + id).value, reason: $('rs_' + id).value, coaConfirmed: $('coa_' + id).checked });
       toast(`ロット ${r.lot_no} を「${r.statusLabel}」にしました`);
+      guideAfterAction();
       await loadInspect();
     } catch (err) {
       alertBox('insMsg', err.message, 'ng');
@@ -744,8 +879,13 @@ function addLine() {
 
 async function submitShipment(e) {
   e.preventDefault();
-  const lines = [...$('shLines').querySelectorAll('.line')].map((l) => ({ productId: l.querySelector('.slProd').value,
+  const lineEls = [...$('shLines').querySelectorAll('.line')];
+  const lines = lineEls.map((l) => ({ productId: l.querySelector('.slProd').value,
     quantity: l.querySelector('.slQty').value, unitPrice: l.querySelector('.slPrice').value }));
+  // 明細：商品を選んだ行は数量必須。1行も無ければ最初の行の商品を未入力扱い
+  const extra = lineEls.filter((l) => l.querySelector('.slProd').value && !l.querySelector('.slQty').value.trim()).map((l) => l.querySelector('.slQty'));
+  if (!lines.some((l) => l.productId) && lineEls[0]) extra.unshift(lineEls[0].querySelector('.slProd'));
+  if (!checkRequired($('shipForm'), 'shMsg', extra)) return;
   const cust = S.M.customers.find((c) => String(c.id) === $('shCustomer').value);
   const filled = lines.filter((l) => l.productId);
   if (cust && filled.length && !(await ask({ title: '出荷を確定しますか？', body: `${cust.name} へ ${filled.length} 明細を出荷します。確定すると在庫が引き落とされます。`, okText: '出荷を確定' }))) return;
@@ -757,6 +897,7 @@ async function submitShipment(e) {
         table([{ label: '商品', cls: 'primary' }, 'ロット', { label: '使用期限', cls: 'nowrap' }, { label: '数量', cls: 'num' }, { label: '単価', cls: 'num' }],
           s.lines.map((l) => ({ cells: [html(esc(l.product)), html(mono(l.lot_no)), l.expires_on, num(l.quantity), num(l.unit_price)] })));
       toast('出荷を確定しました（' + s.shipment_no + '）');
+      guideAfterAction();
       $('shLines').innerHTML = '';
       addLine();
       $('shNote').value = '';
@@ -844,6 +985,7 @@ function selectReturnLine(btn) {
 
 async function submitReturn(e) {
   e.preventDefault();
+  if (!checkRequired($('rtForm'), 'rtMsg')) return;
   await busy(e.submitter, async () => {
     alertBox('rtMsg', '');
     try {
@@ -1003,6 +1145,7 @@ async function submitRecall(e) {
   e.preventDefault();
   const lotIds = [...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value);
   alertBox('rclFormMsg', '');
+  if (!checkRequired($('recallForm'), 'rclFormMsg')) return;
   if (!lotIds.length) { alertBox('rclFormMsg', '対象ロットを1件以上選択してください。', 'ng'); return; }
   if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロットを回収対象にし、出荷を停止します。`, okText: '回収を開始', danger: true }))) return;
   await busy(e.submitter, async () => {
@@ -1066,6 +1209,12 @@ const MASTER = {
   m_location: { key: 'locations', label: '保管場所', fields: [['location_code', '保管場所コード'], ['name', '保管場所名'], ['storage_class', '保管温度区分', 'code:storage_class'],
     ['temp_min', '許容温度下限（℃）', 'number'], ['temp_max', '許容温度上限（℃）', 'number'], ['is_quarantine', '隔離保管場所（返品・保留用）', 'bool'], ['is_active', '有効', 'bool']] },
 };
+/** マスタの必須項目（コード以外）と入力のヒント */
+const MASTER_REQUIRED = ['name', 'storage_class', 'shelf_life_days', 'regulatory_class', 'customer_type', 'address', 'temp_min', 'temp_max'];
+const MASTER_HINTS = { supplier_code: '英数字とハイフン（例：S001）', product_code: '英数字とハイフン（例：EXO-UC50）', customer_code: '英数字とハイフン（例：C001）',
+  location_code: '英数字とハイフン（例：L-M80-02）', shelf_life_days: '製造日からの日数。入荷時に使用期限を自動計算します',
+  min_remaining_days: '使用期限まで、この日数以上残っているロットだけを出荷します（未入力なら90日）', regulatory_class: '販売できる顧客区分は「販売可否ルール」で決まります',
+  medical_inst_code: '顧客区分が「医療機関」の場合は必須', email: '回収が必要になったときの連絡先になります' };
 const LIST_COLS = { m_product: ['product_code', 'name', 'storage_class', 'regulatory_class', 'list_price', 'is_active'],
   m_customer: ['customer_code', 'name', 'customer_type', 'contact_name', 'email', 'is_active'],
   m_supplier: ['supplier_code', 'name', 'contact_name', 'phone', 'is_active'],
@@ -1110,15 +1259,20 @@ function editMaster(id) {
   $('masterTitle').textContent = def.label + (id ? 'の編集' : 'の新規登録');
   $('masterForm').dataset.id = id || '';
   alertBox('masterMsg', '');
+  const isCode = (k) => k.endsWith('_code') && k !== 'medical_inst_code';
   $('masterFields').innerHTML = def.fields.map(([k, label, type]) => {
     const v = r[k] === undefined || r[k] === null ? '' : r[k];
     if (type === 'bool') return `<label class="check"><input type="checkbox" id="mf_${k}"${String(v) === 'true' ? ' checked' : ''}><span>${esc(label)}</span></label>`;
+    const req = isCode(k) || MASTER_REQUIRED.includes(k);
+    const lab = `<label for="mf_${k}">${esc(label)}${req ? '' : ' <span class="opt">任意</span>'}</label>`;
+    const hint = MASTER_HINTS[k] ? `<div class="field-hint" id="mfh_${k}">${esc(MASTER_HINTS[k])}</div>` : '';
+    const common = `id="mf_${k}"${req ? ' required' : ''}${hint ? ` aria-describedby="mfh_${k}"` : ''}`;
     if (type && type.startsWith('code:')) {
       const codes = S.cfg.codes[type.slice(5)];
-      return `<div class="field"><label for="mf_${k}">${esc(label)}</label><select id="mf_${k}"><option value="">選択してください</option>${Object.keys(codes).map((c) => `<option value="${c}"${c === v ? ' selected' : ''}>${esc(codes[c])}</option>`).join('')}</select></div>`;
+      return `<div class="field">${lab}<select ${common}><option value="">選択してください</option>${Object.keys(codes).map((c) => `<option value="${c}"${c === v ? ' selected' : ''}>${esc(codes[c])}</option>`).join('')}</select>${hint}</div>`;
     }
     const attrs = type === 'number' ? ' type="number" inputmode="decimal" step="any"' : type === 'email' ? ' type="email" inputmode="email"' : type === 'tel' ? ' type="tel" inputmode="tel"' : '';
-    return `<div class="field"><label for="mf_${k}">${esc(label)}</label><input id="mf_${k}"${attrs} value="${esc(v)}" autocomplete="off"></div>`;
+    return `<div class="field">${lab}<input ${common}${attrs}${isCode(k) ? ' autocapitalize="characters"' : ''} value="${esc(v)}" autocomplete="off">${hint}</div>`;
   }).join('');
   $('masterDialog').showModal();
   const first = $('masterFields').querySelector('input, select');
@@ -1129,12 +1283,14 @@ async function saveMasterForm(e) {
   if (!e.submitter || e.submitter.value !== 'save') return; // キャンセル・閉じるはそのまま閉じる
   e.preventDefault();
   const t = S.masterTable, data = { id: $('masterForm').dataset.id || null };
+  if (!checkRequired($('masterFields'), 'masterMsg')) return;
   MASTER[t].fields.forEach(([k, , type]) => { data[k] = type === 'bool' ? $('mf_' + k).checked : $('mf_' + k).value; });
   await busy(e.submitter, async () => {
     try {
       await api('saveMaster', t, data);
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
+      guideAfterAction();
       await reloadMasters();
       await loadMaster();
     } catch (err) {
@@ -1171,9 +1327,16 @@ const ACTIONS = {
   openSheet, closeSheet,
   logout: () => logout(''),
   retry,
-  guideOpen: () => openGuide(0),
+  guideOpen: () => openGuide(),
   guideStep: (el) => openGuide(Number(el.dataset.step)),
-  guideNext: () => { if (G_STATE.step >= GUIDE.length - 1) closeGuide(); else { G_STATE.step++; renderGuide(); $('guideNext').focus(); } },
+  guideNext,
+  togglePw: (el) => {
+    const show = $('loginPassword').type === 'password';
+    $('loginPassword').type = show ? 'text' : 'password';
+    el.textContent = show ? '隠す' : '表示';
+    el.setAttribute('aria-pressed', String(show));
+  },
+  goMaster: (el) => { S.masterTable = el.dataset.table; go('master'); },
   guidePrev: () => { if (G_STATE.step > 0) { G_STATE.step--; renderGuide(); (G_STATE.step === 0 ? $('guideNext') : $('guidePrev')).focus(); } },
   guideClose: closeGuide,
   guideGo,
@@ -1182,6 +1345,7 @@ const ACTIONS = {
   hideSetup: async (el) => busy(el, async () => {
     try {
       S.cfg.prefs = await api('saveUserPrefs', { checklistHidden: true });
+      $('main').focus({ preventScroll: true });
       toast('「はじめにやること」を非表示にしました（右上の「?」からガイドを開けます）');
       await loadDashboard();
     } catch (err) { toast(err.message, 'ng'); }
@@ -1208,6 +1372,8 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
+  if (t.getAttribute && t.getAttribute('aria-invalid') === 'true' && String(t.value || '').trim()) t.removeAttribute('aria-invalid');
+  if (t.id === 'guideRulesChk') { saveRulesChecked(t); return; }
   if (t.classList.contains('slProd')) {
     const p = S.M.products.find((x) => String(x.id) === t.value);
     t.closest('.line').querySelector('.slPrice').value = p ? p.list_price : '';
@@ -1226,6 +1392,7 @@ document.addEventListener('change', (e) => {
   }
 });
 document.addEventListener('input', (e) => {
+  if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && String(e.target.value || '').trim()) e.target.removeAttribute('aria-invalid');
   if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
   if (e.target.id === 'invFilter') renderInventory();
   if (e.target.classList.contains('insReason')) updateInspectAction(e.target.dataset.id);
@@ -1243,10 +1410,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('masterForm').addEventListener('submit', saveMasterForm);
   $('sheetBackdrop').addEventListener('click', closeSheet);
   // ガイドは閉じ方（はじめる・あとで見る・Esc）にかかわらず「見た」と記録する
-  $('guideDialog').addEventListener('close', markGuideDone);
+  $('guideDialog').addEventListener('close', onGuideClosed);
   $('guideDialog').addEventListener('keydown', (e) => {
     if (e.target.matches('input, textarea, select')) return;
-    if (e.key === 'ArrowRight') { e.preventDefault(); ACTIONS.guideNext(); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); if (G_STATE.step < LAST) { G_STATE.step++; renderGuide(); } }
     if (e.key === 'ArrowLeft') { e.preventDefault(); ACTIONS.guidePrev(); }
   });
   $('insFilter').addEventListener('click', (e) => {
