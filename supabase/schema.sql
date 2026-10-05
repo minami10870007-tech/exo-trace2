@@ -929,7 +929,7 @@ begin
   if exo.j_text(d, 'email') is not null and exo.j_text(d, 'email') !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
     perform exo.fail('メールアドレスの形式が正しくありません（例：info@example.com）。');
   end if;
-  if exo.j_text(d, 'phone') is not null and exo.j_text(d, 'phone') !~ '^[0-9+() -]{6,}$' then
+  if exo.j_text(d, 'phone') is not null and exo.j_text(d, 'phone') !~* '^[0-9+() -]{6,}((内線|ext\.?|#) ?[0-9]+)?$' then
     perform exo.fail('電話番号は数字とハイフンで入力してください（例：03-1234-5678）。');
   end if;
 
@@ -1016,7 +1016,7 @@ begin
     end if;
     if v_id is not null then
       v_has_stock := exists (select 1 from exo.t_inventory where location_id = v_id and on_hand_qty > 0);
-      if v_has_stock and not v_active then perform exo.fail('在庫がある保管場所は無効化できません。'); end if;
+      if v_has_stock and not v_active then perform exo.fail('在庫がある保管場所は無効化できません。出荷・処分などで在庫を 0 にしてから無効にしてください。'); end if;
       if v_has_stock and exists (select 1 from exo.m_location where id = v_id
           and (storage_class <> v_class or is_quarantine <> exo.j_bool(d, 'is_quarantine'))) then
         perform exo.fail('在庫がある保管場所は、保管温度区分と隔離区分を変更できません。');
@@ -1149,6 +1149,10 @@ begin
 
   if v_temp is not null and (v_temp < v_loc.temp_min or v_temp > v_loc.temp_max) then
     v_warning := '到着時温度が許容範囲（' || v_loc.temp_min || '〜' || v_loc.temp_max || '℃）外です。検品時にQAが評価してください。';
+  end if;
+  if v_exp - v_today < v_product.min_remaining_days then -- 入荷時点で出荷できない期限
+    v_warning := concat_ws(E'\n', v_warning, '使用期限まで残り ' || (v_exp - v_today) || ' 日で、この商品の最低出荷残期間（' || v_product.min_remaining_days
+      || ' 日）を下回るため出荷できません。使用期限を確認してください。');
   end if;
   return exo.idem_put(p, 'register_receipt', jsonb_build_object('receiptNo', v_receipt_no, 'lotNo', v_lot.lot_no, 'warning', v_warning));
 end $$;

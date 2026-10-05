@@ -70,6 +70,7 @@ try {
   const salon = await G.save_master({ table: 'm_customer', data: { customer_code: 'C001', name: 'サロンA', customer_type: 'SALON', address: '東京', email: 'a@salon.jp', is_active: true } });
   await throwsMsg(G.save_master({ table: 'm_customer', data: { customer_code: 'C0E1', name: 'X', customer_type: 'SALON', address: '東京', email: 'abc@', is_active: true } }), /メールアドレスの形式/, 'メール形式');
   await throwsMsg(G.save_master({ table: 'm_customer', data: { customer_code: 'C0E2', name: 'X', customer_type: 'SALON', address: '東京', phone: 'たなか', is_active: true } }), /電話番号/, '電話番号形式');
+  ok((await G.save_master({ table: 'm_customer', data: { customer_code: 'C0E3', name: 'X', customer_type: 'SALON', address: '東京', phone: '03-1111-2222 内線12', is_active: false } })).phone === '03-1111-2222 内線12', '内線つきの電話番号');
   const salonB = await G.save_master({ table: 'm_customer', data: { customer_code: 'C002', name: 'サロンB', customer_type: 'SALON', address: '大阪', is_active: true } });
   const lab = await G.save_master({ table: 'm_customer', data: { customer_code: 'C003', name: '研究所C', customer_type: 'RESEARCH', address: '茨城', is_active: true } });
   await throwsMsg(G.save_master({ table: 'm_customer', data: { customer_code: 'C009', name: '病院', customer_type: 'MEDICAL', address: 'x' } }), /医療機関コード/, 'BR-10');
