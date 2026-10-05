@@ -381,7 +381,7 @@ alter table exo.t_request enable row level security;
 /** 前回同じ依頼番号で処理済みなら、その結果（なければ null） */
 create or replace function exo.idem_get(p jsonb, p_fn text) returns jsonb
 language sql stable set search_path = '' as $$
-  select r.result from exo.t_request r
+  select case when jsonb_typeof(r.result) = 'object' then r.result || '{"_replayed": true}' else r.result end from exo.t_request r -- 再送への応答と分かるように印を付ける
   where (p ->> 'requestId') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     and r.request_id = (p ->> 'requestId')::uuid and r.fn = p_fn
     and r.user_email is not distinct from lower(auth.jwt() ->> 'email')

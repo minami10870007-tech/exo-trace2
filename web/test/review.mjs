@@ -502,11 +502,13 @@ for (const vp of VIEWPORTS) {
     await page.route('**/rpc/create_shipment', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
     try {
       await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /登録できたか確認できませんでした/);
+      await page.fill('#shNote', 'DUP-SHIP-TEST（修正）'); // 確認できないまま内容を変えても、二重に出荷しない
       await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk');
       await page.waitForFunction(() => /出荷を確定しました/.test(document.getElementById('shDone').textContent), null, { timeout: 15000 })
         .catch(async () => { throw new Error('再送できない: ' + (await page.textContent('#shMsg'))); });
     } finally { await page.unroute('**/rpc/create_shipment'); globalThis.EXPECT_NET_ERR = false; }
-    const n = psql(server.sb.db, "select count(*) from exo.t_shipment where note = 'DUP-SHIP-TEST'");
+    if (!/前回の操作は登録されていました/.test(await page.textContent('#toasts'))) throw new Error('変更が反映されていないことを伝えない');
+    const n = psql(server.sb.db, "select count(*) from exo.t_shipment where note like 'DUP-SHIP-TEST%'");
     if (n !== '1') throw new Error('出荷が ' + n + ' 件登録された');
     // 後のテストのため取り消して在庫を戻す
     const no = await page.getAttribute('#shDone [data-no]', 'data-no');
