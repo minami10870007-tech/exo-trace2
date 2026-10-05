@@ -842,8 +842,9 @@ begin
       'product', pr.name, 'product_code', pr.product_code, 'lot_no', l.lot_no, 'supplier_lot_no', l.supplier_lot_no,
       'location', loc.name, 'quarantine', loc.is_quarantine, 'expires_on', l.expires_on, 'daysLeft', l.expires_on - v_today,
       'status', l.status, 'statusLabel', exo.code_label('lot_status', l.status), 'qty', i.on_hand_qty,
-      'allocatable', l.status = 'RELEASED' and not loc.is_quarantine and l.expires_on - v_today >= pr.min_remaining_days,
+      'allocatable', l.status = 'RELEASED' and not loc.is_quarantine and l.expires_on - v_today >= pr.min_remaining_days and pr.is_active,
       'reason', case when l.status <> 'RELEASED' then exo.code_label('lot_status', l.status)
+                     when not pr.is_active then '商品が無効'
                      when loc.is_quarantine then '隔離保管中'
                      when l.expires_on - v_today < pr.min_remaining_days then '残期間' || pr.min_remaining_days || '日未満' end)
       order by pr.product_code, l.expires_on, l.id, loc.id)
@@ -924,6 +925,13 @@ begin
   end if;
   if v_code is null or v_name is null then perform exo.fail('コードと名称は必須です。'); end if;
   if v_code !~ '^[A-Za-z0-9-]+$' then perform exo.fail('コードは英数字とハイフンのみ使用できます。'); end if;
+  -- 回収の連絡先になるので、メール・電話の形式を確かめる（空はよい）
+  if exo.j_text(d, 'email') is not null and exo.j_text(d, 'email') !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    perform exo.fail('メールアドレスの形式が正しくありません（例：info@example.com）。');
+  end if;
+  if exo.j_text(d, 'phone') is not null and exo.j_text(d, 'phone') !~ '^[0-9+() -]{6,}$' then
+    perform exo.fail('電話番号は数字とハイフンで入力してください（例：03-1234-5678）。');
+  end if;
 
   if v_table = 'm_supplier' then
     if exists (select 1 from exo.m_supplier where upper(supplier_code) = upper(v_code) and id is distinct from v_id) then

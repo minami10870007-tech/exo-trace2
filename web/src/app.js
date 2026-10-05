@@ -2150,7 +2150,8 @@ const RECALL_STATUS = { OPEN: '登録', IN_PROGRESS: '対応中', CLOSED: '完�
 async function loadRecalls(exceptId) {
   alertBox('rclMsg', '', null, true);
   const snap = snapshotTargetForms(exceptId); // 入力中の「進捗を更新」は描き直しても残す
-  const [lots, recalls] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
+  const [lots, recalls0] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
+  const recalls = [...recalls0].sort((a, b) => (a.status === 'CLOSED') - (b.status === 'CLOSED')); // 対応中の案件を先に
   const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
   $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
       <small>${joinNw([l.product, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
@@ -2211,7 +2212,11 @@ async function submitRecall(e) {
   const lotIds = [...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value);
   alertBox('rclFormMsg', '');
   if (!checkRequired($('recallForm'), 'rclFormMsg')) return;
-  if (!lotIds.length) { alertBox('rclFormMsg', '対象ロットを1件以上選択してください。', 'ng'); return; }
+  if (!lotIds.length) {
+    alertBox('rclFormMsg', '対象ロットを1件以上選択してください。', 'ng', true);
+    const c = $('rcLots').querySelector('input'); if (c) c.focus(); // すぐ選べるように、最初のロットへ
+    return;
+  }
   if (!(await ask({ title: '回収を開始しますか？', body: `選択した ${lotIds.length} ロット（${[...$('rcLots').querySelectorAll('input:checked')].map((i) => i.closest('label').querySelector('b').textContent).join('、')}）を回収対象にし、出荷を停止します。`, okText: '回収を開始', danger: true }))) return;
   await busy(e.submitter, async () => {
     try {
@@ -2509,6 +2514,24 @@ async function saveMasterForm(e) {
   const t = S.masterTable, data = { id: $('masterForm').dataset.id || null, expected_updated_at: $('masterForm').dataset.ver || null };
   if (!checkRequired($('masterFields'), 'masterMsg')) return;
   MASTER[t].fields.forEach(([k, , type]) => { data[k] = type === 'bool' ? $('mf_' + k).checked : $('mf_' + k).value; });
+  // 回収の連絡先になるメール・電話は形式を確かめる（欄の下に示す）
+  const bad = [];
+  if ($('mf_email') && $('mf_email').value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test($('mf_email').value.trim())) bad.push(['mf_email', 'メールアドレスの形式が正しくありません（例：info@example.com）']);
+  if ($('mf_phone') && $('mf_phone').value.trim() && !/^[0-9+() -]{6,}$/.test($('mf_phone').value.trim())) bad.push(['mf_phone', '電話番号は数字とハイフンで入力してください（例：03-1234-5678）']);
+  if (bad.length) {
+    bad.forEach(([id, m]) => fieldErr($(id), m));
+    alertBox('masterMsg', bad.map((b) => b[1]).join('\n'), 'ng', true);
+    $(bad[0][0]).focus();
+    return;
+  }
+  // 在庫がある商品・仕入先・保管場所を無効にするときは、出荷できなくなることを確かめる
+  if (data.id && S.masterOrig && String(S.masterOrig.is_active) === 'true' && data.is_active === false && ['m_product', 'm_location', 'm_supplier'].includes(t)) {
+    await loadInventory().catch(() => {});
+    const rows = (S.inventory || []).filter((r) => r.qty > 0 && (t === 'm_product' ? r.product_code === S.masterOrig.product_code
+      : t === 'm_location' ? String(r.location_id) === String(data.id) : false));
+    const qty = rows.reduce((a, r) => a + r.qty, 0);
+    if (qty > 0 && !(await ask({ title: `${MASTER[t].label}を無効にしますか？`, body: `この${MASTER[t].label}には在庫 ${fmt(qty)} があります。無効にすると、この在庫は出荷できなくなります（在庫照会では「出荷不可」と表示されます）。`, okText: '無効にする', danger: true }))) return;
+  }
   // 既存データのコードを変えるときは念のため確認する（Enter での誤保存に備える）
   const codeKey = MASTER[t].fields[0][0];
   const before = data.id && S.masterOrig ? String(S.masterOrig[codeKey] || '') : '';
