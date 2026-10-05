@@ -286,6 +286,18 @@ try {
     await throwsMsg(rcp({ supplierLotNo: 'SIB-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 1, unitPrice: 1 }), /回収中/, '回収中の仕入先ロットは入荷できない');
     ok(psql(sb.db, `select status from exo.t_lot where id = ${bid}`) === 'RECALLED', '分納ロットも回収中になる'); }
 
+  { // 不合格は1回の納品に限ることがある：同じ仕入先ロットの別の分納は止めず、知らせる
+    const a = await rcp({ supplierLotNo: 'REJ-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 3, unitPrice: 1 });
+    const aid = psql(sb.db, `select id from exo.t_lot where lot_no = '${a.lotNo}'`);
+    await G.change_lot_status({ lotId: aid, to: 'RELEASED', coaConfirmed: true, expectedStatus: 'QUARANTINE' });
+    const b = await rcp({ supplierLotNo: 'REJ-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 2, unitPrice: 1 });
+    const bid = psql(sb.db, `select id from exo.t_lot where lot_no = '${b.lotNo}'`);
+    const rj = await G.change_lot_status({ lotId: bid, to: 'REJECTED', reason: '到着温度逸脱', expectedStatus: 'QUARANTINE' });
+    ok(rj.siblings.length === 1 && rj.siblings[0].lot_no === a.lotNo, '不合格にしたとき、出荷できる分納ロットを知らせる');
+    await G.change_lot_status({ lotId: aid, to: 'HOLD', reason: '確認', expectedStatus: 'RELEASED' });
+    ok((await G.change_lot_status({ lotId: aid, to: 'RELEASED', reason: '問題なし', coaConfirmed: true, expectedStatus: 'HOLD' })).status === 'RELEASED', '保留にしても合格に戻せる（分納の不合格では止めない）');
+    ok(!!(await rcp({ supplierLotNo: 'REJ-1', receiptDate: '2026-10-04', expiresOn: '2028-06-30', quantity: 1, unitPrice: 1 })).lotNo, '不合格の分納があっても、次の納品は受けられる'); }
+
   // ---------------- 日次チェック ----------------
   psql(sb.db, `alter database ${sb.db} set exo.today = '2027-07-05'`);
   const dc = JSON.parse(psql(sb.db, "set exo.today = '2027-07-05'; select exo.daily_check()"));

@@ -1352,7 +1352,10 @@ async function changeStatus(btn) {
         expectedStatus: $('to_' + id).dataset.status });
       guideAfterAction();
       await loadInspect(id);
-      alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。`, 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ') : '');
+      const sib = r.siblings || [];
+      alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。` +
+        (sib.length ? `\n同じ仕入先ロット「${r.supplier_lot_no}」の ${sib.map((x) => `${x.lot_no}（${x.statusLabel}）`).join('、')} は、そのまま出荷できる状態です。同じ問題が疑われる場合は、保留にしてください。` : ''),
+        sib.length ? 'warn' : 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ') : sib.length ? '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>' : '');
     } catch (err) {
       // 他の利用者の変更などで状態が変わっている可能性があるので、最新の一覧に描き直す（入力中の内容は残す）
       const card0 = btn.closest('.lot-card');
@@ -2179,7 +2182,7 @@ async function loadRecalls(exceptId) {
   const [lots, recalls0] = await Promise.all([api('getLots', ['QUARANTINE', 'RELEASED', 'HOLD', 'REJECTED', 'EXPIRED']), api('listRecalls')]);
   const recalls = [...recalls0].sort((a, b) => (a.status === 'CLOSED') - (b.status === 'CLOSED')); // 対応中の案件を先に
   const checked = new Set([...$('rcLots').querySelectorAll('input:checked')].map((i) => i.value)); // 選択中のロットは描き直しても残す
-  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}" data-key="${esc(l.product_id + ':' + String(l.supplier_lot_no).toUpperCase())}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
+  $('rcLots').innerHTML = lots.length ? lots.map((l) => `<label class="check"><input type="checkbox" value="${l.id}" data-key="${esc(l.product_id + ':' + l.supplier + ':' + String(l.supplier_lot_no).toUpperCase())}"${checked.has(String(l.id)) ? ' checked' : ''}><span><b class="mono">${esc(l.lot_no)}</b>
       <small>${joinNw([l.product, '仕入先ロット ' + l.supplier_lot_no, l.statusLabel, '期限 ' + l.expires_on])}</small></span></label>`).join('') : '<p class="note">対象にできるロットがありません。</p>';
   $('rclList').innerHTML = recalls.length ? recalls.map(renderRecall).join('') : `<div class="card">${empty('回収案件はありません', 'check')}</div>`;
   $('rclList').querySelectorAll('.meter i').forEach((i) => { i.style.width = Math.min(100, Number(i.dataset.w) || 0) + '%'; });
@@ -2257,8 +2260,10 @@ async function submitRecall(e) {
     try {
       const r = await api('createRecall', { title: $('rcTitle').value, reason: $('rcReason').value, severity: $('rcSev').value, lotIds });
       const nTargets = r.targets.filter((t) => Number(t.shipped_qty) > 0).length;
-      const createdMsg = nTargets ? `回収案件 ${r.recall_no} を登録しました（対象顧客 ${nTargets} 件）。対象顧客に連絡し、進捗を記録してください。`
-        : `回収案件 ${r.recall_no} を登録しました。出荷先の顧客はいません（対象顧客 0 件）。社内の在庫を処分してから、回収を完了してください。`;
+      const added = (r.lots || []).length - lotIds.length; // 同じ仕入先ロットの分納分（サーバーが自動で含めた）
+      const createdMsg = (nTargets ? `回収案件 ${r.recall_no} を登録しました（対象顧客 ${nTargets} 件）。対象顧客に連絡し、進捗を記録してください。`
+        : `回収案件 ${r.recall_no} を登録しました。出荷先の顧客はいません（対象顧客 0 件）。社内の在庫を処分してから、回収を完了してください。`)
+        + (added > 0 ? `\n同じ仕入先ロットの分納分 ${added} ロットも対象に含めました。` : '');
       $('recallForm').reset();
       $('rcNew').open = false;
       await loadRecalls();

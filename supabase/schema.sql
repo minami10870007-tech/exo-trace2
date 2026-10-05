@@ -412,12 +412,13 @@ language sql immutable set search_path = '' as $$
   select case p_status when 'RECALLED' then '回収中' when 'REJECTED' then '不合格' when 'EXPIRED' then '期限切れ' else p_status end
 $$;
 
-/** 同じ仕入先ロット（仕入先・商品・仕入先ロット番号が同じ）で、品質上止まっている社内ロット（なければ null） */
+/** 同じ仕入先ロット（仕入先・商品・仕入先ロット番号が同じ）で、回収中の社内ロット（なければ null）。
+ *  回収は仕入先ロット全体に及ぶので止める。不合格は1回の納品（輸送温度など）に限ることがあるので、ここでは止めない */
 create or replace function exo.blocked_sibling(p_supplier bigint, p_product bigint, p_sup_lot text, p_except bigint default null) returns exo.t_lot
 language sql stable set search_path = '' as $$
   select * from exo.t_lot
   where supplier_id = p_supplier and product_id = p_product and upper(supplier_lot_no) = upper(p_sup_lot)
-    and status in ('RECALLED', 'REJECTED', 'EXPIRED') and id is distinct from p_except
+    and status = 'RECALLED' and id is distinct from p_except
   order by id limit 1
 $$;
 
@@ -1213,7 +1214,7 @@ begin
   end if;
   if v_to = 'RELEASED' then
     v_sib := exo.blocked_sibling(v_lot.supplier_id, v_lot.product_id, v_lot.supplier_lot_no, v_lot.id);
-    if v_sib.id is not null and v_sib.status in ('RECALLED', 'REJECTED') then
+    if v_sib.id is not null then
       perform exo.fail('同じ仕入先ロット「' || v_lot.supplier_lot_no || '」の社内ロット ' || v_sib.lot_no || ' が' || exo.block_label(v_sib.status)
         || 'のため、合格にできません。品質責任者に確認してください（保留・不合格にはできます）。');
     end if;
@@ -1233,7 +1234,11 @@ begin
     update exo.t_lot set inspected_by = v_user, inspected_at = now() where id = v_lot.id;
   end if;
   perform exo.set_lot_status(v_lot.id, v_to, coalesce(v_reason, '検品合格（COA確認済）'), v_user);
-  return exo.idem_put(p, 'change_lot_status', exo.lot_view(v_lot.id));
+  -- 不合格にしたとき、同じ仕入先ロットで出荷できる状態の社内ロットがあれば知らせる（必要なら保留にしてもらう）
+  return exo.idem_put(p, 'change_lot_status', exo.lot_view(v_lot.id) || jsonb_build_object('siblings',
+    case when v_to = 'REJECTED' then coalesce((select jsonb_agg(jsonb_build_object('lot_no', lot_no, 'status', status, 'statusLabel', exo.code_label('lot_status', status)) order by id)
+      from exo.t_lot where supplier_id = v_lot.supplier_id and product_id = v_lot.product_id and upper(supplier_lot_no) = upper(v_lot.supplier_lot_no)
+        and id <> v_lot.id and status in ('RELEASED', 'HOLD', 'QUARANTINE')), '[]'::jsonb) else '[]'::jsonb end));
 end $$;
 
 -- ---- 出荷（P-04 FEFO自動引当 ＋ P-05 出荷確定 を同時に実行） ----
