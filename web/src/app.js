@@ -233,7 +233,9 @@ async function api(fn, ...args) {
       const no = data.shipment_no || data.receiptNo || data.returnNo || data.recall_no || data.lot_no || data.lotNo || '';
       // 何が登録されたかも示す（もう一度送る必要があるかを判断できるように）
       const what = Array.isArray(data.lines) ? '：' + data.lines.map((l) => `${l.product} × ${l.quantity}`).join('、') : data.lotNo ? `：ロット ${data.lotNo}` : '';
-      throw Object.assign(new Error(`前回送った内容（${no}${what}）は登録済みでした。いま入力中の内容は、まだ登録されていません。\n追加で登録する場合だけ、もう一度同じ操作をしてください（前回の内容を直したい場合は、登録済みのほうを取消・処分してください）。`), { replayedOther: true, result: data });
+      const advice = /^lot_/.test(form) ? '判定を変える場合は、もう一度選んで登録してください。'
+        : '追加で登録する場合だけ、もう一度同じ操作をしてください（前回の内容を直したい場合は、登録済みのほうを取消・処分してください）。';
+      throw Object.assign(new Error(`前回送った内容（${no}${what}）は登録済みでした。いま入力中の内容は、まだ登録されていません。\n${advice}`), { replayedOther: true, result: data });
     }
     if (form) resetRequest(form); // 登録できた：次は新しい依頼
     return data;
@@ -763,6 +765,7 @@ function showPage(id) {
   if (!$('app').hidden && !$('guideDialog').open && document.activeElement && !document.activeElement.closest('#guideResume')) focusTo($('main'));
   const loaders = { dashboard: loadDashboard, inspect: loadInspect, shipment: loadShipmentPage, inventory: loadInventory, return: loadReturnRecent, traceLot: loadTraceRecent, traceCustomer: loadCustomerTrace,
     recall: loadRecalls, master: loadMaster };
+  guideFollowPage(id);
   const withMasters = ['master', 'shipment', 'receipt', 'traceCustomer', 'return'].includes(id); // マスタを使う画面は最新にしてから表示
   if (id === 'receipt') loaders.receipt = async () => {};
   let done = Promise.resolve();
@@ -1010,6 +1013,7 @@ function guideGo() {
   if (g.table) S.masterTable = g.table;
   go(g.page);
   if (!g.key) return; // まとめ・はじめには画面を開くだけ（戻る案内は出さない）
+  G_STATE.doneList = [];
   setResume(false);
   showResume(true);
   $('main').focus({ preventScroll: true });
@@ -1030,6 +1034,18 @@ function setResume(done) {
   $('guideResumeBtn').textContent = done ? '次のステップへ' : 'ガイドに戻る';
 }
 
+/** ガイドの帯が出ている間に、画面のボタン（「検品へ進む」など）で次のステップの画面へ進んだら、帯も次のステップに合わせる */
+function guideFollowPage(page) {
+  if ($('guideResume').hidden || !S.cfg) return;
+  const st = setupState(), g = GUIDE[G_STATE.step];
+  if (!g.key || !st[g.key]) return;
+  const next = firstTodo(st);
+  if (next < 0 || GUIDE[next].page !== page || next === G_STATE.step) return;
+  (G_STATE.doneList = G_STATE.doneList || []).push(g.short);
+  G_STATE.step = next;
+  setResume(false);
+}
+
 /** 登録・判定・出荷などの後：ガイドの途中なら完了を確認して表示を更新する */
 async function guideAfterAction() {
   if (!S.cfg) return;
@@ -1047,7 +1063,8 @@ async function guideResume(btn) {
     const finished = g.key && setupState()[g.key];
     if (finished) {
       const next = firstTodo(setupState());
-      G_STATE.justDone = `「${g.title}」が完了しました。` + (next >= 0 ? `次は「${GUIDE[next].title}」です。` : 'これで準備はすべて完了です。');
+      const done = [...(G_STATE.doneList || []), g.short]; G_STATE.doneList = []; // 帯を出してから済ませたステップをまとめて伝える
+      G_STATE.justDone = (done.length > 1 ? `${done.join('・')}が完了しました。` : `「${g.title}」が完了しました。`) + (next >= 0 ? `次は「${GUIDE[next].title}」です。` : 'これで準備はすべて完了です。');
       openGuide(next >= 0 ? next : LAST);
     } else {
       openGuide(G_STATE.step);
@@ -1309,6 +1326,7 @@ async function changeStatus(btn) {
       : { title: `ロット ${lotNo} を保留にしますか？`, body: '保留中は出荷できません。確認が済んだら「合格」に戻せます。', okText: '保留にする' });
     if (!ok) return;
   }
+  const expected = $('to_' + id).dataset.status; // 判定前の状態（通信が途切れたとき、変わったかを見分けるため）
   await busy(btn, async () => {
     alertBox('insMsg', '');
     try {
@@ -1328,6 +1346,16 @@ async function changeStatus(btn) {
         guideAfterAction();
         alertBox('insMsg', `通信が途切れましたが、ロット ${lotNo0} は「${code('lot_status', to)}」に登録されていました。`, 'ok');
         return;
+      }
+      if (err.unsure && !$('to_' + id)) { // 一覧から外れた：実際の状態を確かめる
+        const lot = await api('traceLot', lotNo0).then((ls) => ls.find((x) => x.lot_no === lotNo0), () => null);
+        if (lot && lot.status === to) {
+          resetRequest('lot_' + id); guideAfterAction(); S.insFocusLot = lotNo0;
+          alertBox('insMsg', `通信が途切れましたが、ロット ${lotNo0} は「${code('lot_status', to)}」に登録されていました（今の表示条件では一覧に出ません）。`, 'ok', false,
+            '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>');
+          return;
+        }
+        if (lot && lot.status !== expected) resetRequest('lot_' + id); // 状態が変わった：次の判定は新しい依頼
       }
       const gone = (/他の利用者/.test(err.message) || err.unsure) && !$('to_' + id);
       if (gone) { S.insFocusLot = lotNo0; S.insReason = { id, reason: reason0, to: $('to_' + id) ? '' : to }; }
