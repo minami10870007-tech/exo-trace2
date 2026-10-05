@@ -85,8 +85,8 @@
     </div>
 
     <section class="page" id="page-dashboard" aria-labelledby="pageTitle">
-      <div class="kpis" id="dashKpis"></div>
       <div id="dashSetup"></div>
+      <div class="kpis" id="dashKpis"></div>
       <div class="dash-grid" id="dashBody"></div>
     </section>
 
@@ -154,18 +154,23 @@
     <section class="page" id="page-return" hidden>
       <div class="card">
         <h2 class="card-title">返品登録</h2>
-        <form class="search-row" id="rtSearch" novalidate>
-          <label class="sr-only" for="rtShipNo">出荷番号</label>
-          <input id="rtShipNo" placeholder="出荷番号（例 SH-202610-0001）" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
-          <button class="btn btn-secondary" type="submit">検索</button>
+        <p class="card-sub">返品された出荷を、出荷番号で探すか、下の「最近の出荷」から選んでください。</p>
+        <form id="rtSearch" novalidate>
+          <label class="field-label" for="rtShipNo">出荷番号</label>
+          <div class="search-row">
+            <input id="rtShipNo" placeholder="例 SH-202610-0001" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
+            <button class="btn btn-secondary" type="submit">検索</button>
+          </div>
         </form>
+        <div id="rtFindMsg"></div>
         <div id="rtShipment"></div>
+        <div id="rtRecent"></div>
       </div>
       <form class="card" id="rtForm" hidden novalidate>
         <h2 class="card-title">返品内容</h2>
         <p class="card-sub" id="rtLineInfo"></p>
         <div class="form-grid four">
-          <div class="field"><label for="rtQty">返品数量</label><input id="rtQty" type="number" inputmode="numeric" min="1" step="1" required></div>
+          <div class="field"><label for="rtQty">返品数量</label><input id="rtQty" type="number" inputmode="numeric" min="1" step="1" required aria-describedby="rtQtyHint"><div class="field-hint" id="rtQtyHint"></div></div>
           <div class="field"><label for="rtDate">返品日</label><input id="rtDate" type="date" required></div>
           <div class="field"><label for="rtQLoc">受入保管場所（隔離）</label><select id="rtQLoc" required></select></div>
           <div class="field"><label for="rtDisp">処置</label><select id="rtDisp" required><option value="">選択してください</option><option value="DISPOSE">廃棄</option><option value="RESTOCK">在庫に戻す</option></select></div>
@@ -191,9 +196,10 @@
       <div class="card">
         <form class="search-row" id="tlSearch" novalidate>
           <label class="sr-only" for="tlQuery">ロット番号</label>
-          <input id="tlQuery" type="search" placeholder="社内ロット番号 または 仕入先ロット番号" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
+          <input id="tlQuery" type="search" placeholder="ロット番号（一部でも可）" aria-describedby="tlHint" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
           <button class="btn btn-primary" type="submit"><svg class="ic"><use href="#i-search"/></svg>追跡</button>
         </form>
+        <p class="field-hint" id="tlHint">社内ロット番号・仕入先ロット番号のどちらでも探せます。</p>
         <p class="note">部分一致で検索できます。販売先・顧客の手元に残っている数量・在庫・ステータス履歴を表示します。</p>
       </div>
       <div id="tlBody"></div>
@@ -217,7 +223,7 @@
         <form id="recallForm" novalidate>
           <div class="form-grid">
             <div class="field span-2"><label for="rcTitle">件名</label><input id="rcTitle" required maxlength="200"></div>
-            <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required><option value="">選択してください</option><option value="I">クラスI</option><option value="II">クラスII</option><option value="III">クラスIII</option></select></div>
+            <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required aria-describedby="rcSevHint"><option value="">選択してください</option><option value="I">クラスI（重い健康被害のおそれ）</option><option value="II">クラスII（一時的・軽い健康被害のおそれ）</option><option value="III">クラスIII（健康被害のおそれはほぼない）</option></select><div class="field-hint" id="rcSevHint">迷ったら品質責任者に確認してください。</div></div>
             <div class="field span-full"><label for="rcReason">回収理由</label><textarea id="rcReason" rows="3" required maxlength="1000"></textarea></div>
           </div>
           <fieldset class="field span-full"><legend>対象ロット</legend><div class="check-list" id="rcLots"></div></fieldset>
@@ -262,7 +268,7 @@
   <form method="dialog" id="dialogForm">
     <h2 id="dialogTitle"></h2>
     <p id="dialogBody"></p>
-    <div class="field" id="dialogInputWrap" hidden><label for="dialogInput" id="dialogInputLabel"></label><textarea id="dialogInput" rows="3" maxlength="1000"></textarea></div>
+    <div class="field" id="dialogInputWrap" hidden><label for="dialogInput" id="dialogInputLabel"></label><textarea id="dialogInput" rows="3" maxlength="1000" aria-describedby="dialogInputErr"></textarea><div class="field-err" id="dialogInputErr"></div></div>
     <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="ok" type="submit" id="dialogOk">OK</button></div>
   </form>
 </dialog>
@@ -290,6 +296,7 @@
     <p class="guide-body" id="guideBody"></p>
     <div id="guideStatus"></div>
     <button class="btn btn-secondary btn-block" type="button" data-action="guideGo" id="guideGo"></button>
+    <div id="guideAfter"></div>
     <div class="guide-nav">
       <button class="btn btn-ghost" type="button" data-action="guidePrev" id="guidePrev">戻る</button>
       <ol class="guide-dots" id="guideDots" aria-hidden="true"></ol>

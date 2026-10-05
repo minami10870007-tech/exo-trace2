@@ -251,7 +251,7 @@ for (const vp of VIEWPORTS) {
   const { ctx, page, errs } = await newPage(vp);
   const step = async (label, fn) => {
     try { await fn(); report.flow.push({ step: label, ok: true }); }
-    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0] }); total++; }
+    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0], detail: e.message.slice(0, 1200) }); total++; }
   };
   const toastText = () => page.textContent('#toasts');
   const waitText = (sel, re) => page.waitForFunction(([s, src]) => new RegExp(src).test(document.querySelector(s).textContent), [sel, re.source], { timeout: 15000 });
@@ -266,8 +266,8 @@ for (const vp of VIEWPORTS) {
     await page.click('#receiptForm button[type="submit"]'); await waitText('#rcMsg', /。/);
     const t = await page.textContent('#rcMsg'); if (!/入荷を登録しました/.test(t)) throw new Error(t);
   });
-  await step('メニュー→検品→合格', async () => {
-    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="inspect"]'); await idle(page);
+  await step('下部ナビ→検品→合格', async () => {
+    await page.click('#bottomNav [data-page="inspect"]'); await idle(page);
     const card = page.locator('.lot-card', { hasText: 'FLOW-001' });
     const btn = card.locator('[data-action="changeStatus"]');
     if (!(await btn.isDisabled())) throw new Error('判定未選択でボタンが押せる');
@@ -286,6 +286,21 @@ for (const vp of VIEWPORTS) {
     await page.click('#shipForm button[type="submit"]'); await page.click('#dialogOk'); await waitText('#shMsg', /出荷を確定しました|。/);
     const t = await page.textContent('#shMsg'); if (!/出荷を確定しました/.test(t)) throw new Error(t);
     shippedLot = await page.textContent('#shMsg .rtable .mono');
+  });
+  await step('不合格は確認ダイアログを出す', async () => {
+    await page.click('#bottomNav [data-page="inspect"]'); await idle(page);
+    const card = page.locator('#insBody .lot-card', { has: page.locator('select.insTo') }).first();
+    await card.locator('select.insTo').selectOption('REJECTED'); await card.locator('input.insReason').fill('テスト');
+    await card.locator('[data-action="changeStatus"]').click(); await page.waitForSelector('#dialog[open]');
+    if (!/元に戻せません/.test(await page.textContent('#dialogBody'))) throw new Error('確認の文言がない');
+    await page.click('#dialogForm button[value="cancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+  });
+  await step('返品：出荷番号が空なら案内・最近の出荷から選べる', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
+    await page.click('#rtSearch button[type="submit"]');
+    if (!(await page.isVisible('#rtFindMsg .alert'))) throw new Error('案内が見えない');
+    await page.click('#rtRecent [data-action="pickReturnShipment"]'); await idle(page);
+    if (!(await page.$('#rtShipment [data-action="selectReturnLine"]'))) throw new Error('出荷が表示されない');
   });
   await step('ロット追跡', async () => {
     await page.click('#bottomNav [data-page="traceLot"]'); await page.fill('#tlQuery', shippedLot); await page.click('#tlSearch button'); await idle(page);
@@ -389,7 +404,7 @@ for (const vp of VIEWPORTS) {
   const { ctx, page, errs } = await newPage(VIEWPORTS[1]);
   const step = async (label, fn) => {
     try { await fn(); report.flow.push({ step: label, ok: true }); }
-    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0] }); total++; }
+    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0], detail: e.message.slice(0, 1200) }); total++; }
   };
   const waitText = (sel, re) => page.waitForFunction(([s, src]) => new RegExp(src).test(document.querySelector(s).textContent), [sel, re.source], { timeout: 15000 });
   await step('ガイド：初回ログインで自動表示', async () => {
@@ -411,7 +426,7 @@ for (const vp of VIEWPORTS) {
     if ((await page.getAttribute('#msTabs [data-table="m_supplier"]', 'aria-selected')) !== 'true') throw new Error('仕入先タブが開かない');
     await page.click('#msNew'); await page.fill('#mf_supplier_code', 'S100'); await page.fill('#mf_name', 'ガイド仕入先');
     await page.click('#masterForm button[value="save"]'); await waitText('#toasts', /保存しました/);
-    await waitText('#guideResume', /完了しました/);
+    await waitText('#guideResume', /完了：仕入先/);
     await page.click('[data-action="guideResume"]'); await page.waitForSelector('#guideDialog[open]');
     await waitText('#guideCount', /準備 2 \/ 7/);
     if (!/完了しました。次は「商品を登録する」/.test(await page.textContent('#guideStatus'))) throw new Error('完了の表示がない');
@@ -456,7 +471,7 @@ for (const vp of VIEWPORTS) {
   const { ctx, page, errs } = await newPage(VIEWPORTS[5]);
   const step = async (label, fn) => {
     try { await fn(); report.flow.push({ step: label, ok: true }); }
-    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0] }); total++; }
+    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0], detail: e.message.slice(0, 1200) }); total++; }
   };
   const page2 = await ctx.newPage();
   await step('別タブで別アカウントがログインすると元のタブはログアウト', async () => {
