@@ -1750,6 +1750,7 @@ begin
   if v_r.id is null then perform exo.fail('回収案件が見つかりません。画面を再読込してください。'); end if;
   if v_r.status = 'CLOSED' then perform exo.fail('完了した回収案件は更新できません（他の利用者が完了した可能性があります）。'); end if;
   if v_on is null then perform exo.fail('連絡日を入力してください。'); end if;
+  if exo.j_text(p, 'contactMethod') is null then perform exo.fail('連絡方法を選択してください。'); end if; -- 記録済みの方法を空で消さないように
   if v_on > exo.today() or v_on < v_r.started_on then perform exo.fail('連絡日は回収開始日以降、当日以前の日付を入力してください。'); end if;
   update exo.t_recall_target set contacted_on = greatest(contacted_on, v_on), -- 最終連絡日は前に戻さない
       -- 方法は、最終連絡日を更新する（同じか後の日付の）連絡のときだけ書き換える（前の日付の連絡で、最終連絡の方法を変えない）

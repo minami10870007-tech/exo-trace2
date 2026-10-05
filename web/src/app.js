@@ -1259,7 +1259,7 @@ async function submitReceipt(e) {
       const r = await api('registerReceipt', { supplierId: $('rcSupplier').value, productId: $('rcProduct').value, supplierLotNo: $('rcSupLot').value,
         receiptDate: $('rcDate').value, manufacturedOn: $('rcMfg').value, expiresOn: $('rcExp').value, quantity: $('rcQty').value,
         unitPrice: $('rcPrice').value, arrivalTemp: $('rcTemp').value, locationId: $('rcLoc').value });
-      alertBox('rcMsg', `入荷を登録しました。\n入荷番号 ${r.receiptNo}／社内ロット番号 ${r.lotNo}（検品待ち）` + (r.note ? '\n' + r.note : '') + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok', false,
+      alertBox('rcMsg', `入荷を登録しました。\n入荷番号 ${r.receiptNo} ／ 社内ロット番号 ${r.lotNo}（検品待ち）` + (r.note ? '\n' + r.note : '') + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok', false,
         goBtn('inspect', '検品へ進む'));
       ['rcSupLot', 'rcMfg', 'rcExp', 'rcQty', 'rcPrice', 'rcTemp'].forEach((id) => { $(id).value = ''; });
       clearMarks($('receiptForm'));
@@ -1511,7 +1511,7 @@ async function submitShipment(e) {
       alertBox('shMsg', '');
       $('shDone').innerHTML = `<div class="alert alert-ok" role="status" tabindex="-1" data-no="${esc(s.shipment_no)}"><div class="alert-text">出荷を確定しました。出荷番号 <span class="mono">${esc(s.shipment_no)}</span>（${esc(s.customer)}）
         <div class="alert-actions">${[...new Set(s.lines.map((l) => l.lot_no))].slice(0, 4).map((no) => `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(no)}">${esc(no)} を追跡</button>`).join('')}</div></div></div>` +
-        table([{ label: '商品', cls: 'primary' }, 'ロット', { label: '使用期限', cls: 'nowrap' }, { label: '数量', cls: 'num' }, { label: '単価', cls: 'num' }],
+        table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: '使用期限', cls: 'nowrap' }, { label: '数量', cls: 'num' }, { label: '単価', cls: 'num' }],
           s.lines.map((l) => ({ cells: [html(esc(l.product)), html(mono(l.lot_no)), l.expires_on, num(l.quantity), num(l.unit_price)] })));
       $('shDone').scrollIntoView({ block: 'start', behavior: 'smooth' });
       focusTo($('shDone').firstElementChild);
@@ -1867,7 +1867,7 @@ async function submitReturn(e) {
       const r = await api('registerReturn', { shipmentLineId: S.returnLine, quantity: $('rtQty').value, returnedOn: $('rtDate').value, reason: $('rtReason').value,
         quarantineLocationId: $('rtQLoc').value, disposition: $('rtDisp').value, restockLocationId: $('rtRLoc').value });
       const lot = S.returnLot;
-      alertBox('rtFindMsg', `返品を登録しました。返品番号 ${r.returnNo}／処置：${r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄'}${r.recall ? '（回収品として計上）' : ''}`, 'ok', true,
+      alertBox('rtFindMsg', `返品を登録しました。返品番号 ${r.returnNo} ／ 処置：${r.disposition === 'RESTOCK' ? '在庫に戻す' : '廃棄'}${r.recall ? '（回収品として計上）' : ''}`, 'ok', true,
         `<button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の返品を登録</button>` +
         (lot ? `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(lot)}">このロットを追跡</button>` : '') +
         (r.recall ? (r.recallId ? `<button type="button" class="btn btn-secondary btn-sm" data-action="openRecall" data-id="${r.recallId}">回収案件を開く</button>` : goBtn('recall', '回収案件を開く')) : ''));
@@ -2239,8 +2239,8 @@ function renderRecall(r) {
   const lotBlock = (t) => {
     const editable = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED';
     const form = ed && t.status !== 'RECOVERED' && t.status !== 'CLOSED' ? `<details class="target-edit"><summary>このロットの進捗を更新（回収不能・クローズなど）</summary><div class="target-grid">
-        <div class="field f-date"><label for="cd_${t.id}">連絡日</label><input type="date" id="cd_${t.id}" value="${esc(t.contacted_on)}" data-orig="${esc(t.contacted_on)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
-        <div class="field"><label for="cm_${t.id}">連絡方法</label><select id="cm_${t.id}" data-orig="${esc(t.contact_method)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
+        <div class="field f-date"><label for="cd_${t.id}">連絡日（このロットのみ）</label><input type="date" id="cd_${t.id}" value="${esc(t.contacted_on)}" data-orig="${esc(t.contacted_on)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}"></div>
+        <div class="field"><label for="cm_${t.id}">連絡方法（このロットのみ）</label><select id="cm_${t.id}" data-orig="${esc(t.contact_method)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === t.contact_method ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <div class="field"><label for="un_${t.id}">回収不能数</label><input type="number" inputmode="numeric" min="0" id="un_${t.id}" value="${esc(t.unrecoverable_qty)}" data-orig="${esc(t.unrecoverable_qty)}"></div>
         ${editable ? `<div class="field f-status"><label for="st_${t.id}">状態</label><select id="st_${t.id}" data-orig=""><option value="">変更しない</option>${t.status === 'CONTACTED' ? '' : '<option value="CONTACTED">連絡済にする</option>'}<option value="CLOSED">クローズする</option></select></div>` : ''}
         <div class="field span-reason"><label for="cr_${t.id}">クローズ理由 <span class="opt">クローズ時必須</span></label><input id="cr_${t.id}" value="${esc(t.close_reason)}" data-orig="${esc(t.close_reason)}" autocomplete="off" maxlength="500" aria-describedby="cre_${t.id}"><div class="field-err" id="cre_${t.id}" role="alert"></div></div>
@@ -2256,7 +2256,7 @@ function renderRecall(r) {
   const targets = groups.size ? [...groups.values()].map((ts) => {
     const t0 = ts[0], openTs = ts.filter((t) => t.status !== 'RECOVERED' && t.status !== 'CLOSED');
     const contacts = [t0.contact_name ? esc(t0.contact_name) : '', telLink(t0.phone), mailLink(t0.email)].filter(Boolean);
-    const last = ts.filter((t) => t.contacted_on).sort((a, b) => String(b.contacted_on).localeCompare(String(a.contacted_on)))[0];
+    const last = (openTs.length ? openTs : ts).filter((t) => t.contacted_on).sort((a, b) => String(b.contacted_on).localeCompare(String(a.contacted_on)))[0];
     const st = !openTs.length && ts.every((t) => Number(t.shipped_qty) === 0) ? ['CLOSED', '対象外'] : !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
     const gid = `cg_${r.id}_${t0.customer_id}`;
     const d0 = S.cfg.today; // 連絡はその日に記録することが多いので、今日の日付を入れておく（前回の連絡日は見出しに表示）
@@ -2775,6 +2775,8 @@ const ACTIONS = {
     const gid = `cg_${el.dataset.recall}_${el.dataset.customer}`, d = $(gid + '_d');
     $(gid + '_e').textContent = ''; d.removeAttribute('aria-invalid');
     if (!d.value) { d.setAttribute('aria-invalid', 'true'); $(gid + '_e').textContent = '連絡日を入力してください。'; d.focus(); return; }
+    const mth = $(gid + '_m'); mth.removeAttribute('aria-invalid');
+    if (!mth.value) { mth.setAttribute('aria-invalid', 'true'); $(gid + '_e').textContent = '連絡方法を選択してください。'; mth.focus(); return; }
     if (el.dataset.last && d.value < el.dataset.last) { // 前回より前の日付は記録しても最終連絡に反映されないので、先に止める
       d.setAttribute('aria-invalid', 'true');
       $(gid + '_e').textContent = `前回の連絡日（${el.dataset.last}）より前の日付です。最終連絡日・方法は変わらないため、記録できません。日付を確認してください。`;
@@ -2787,7 +2789,7 @@ const ACTIONS = {
         $('toasts').innerHTML = '';
         // 他の利用者がもっと新しい連絡を記録していた（画面が古かった）ときは、そのことを伝える
         const latest = (rv.targets || []).filter((t) => String(t.customer_id) === String(el.dataset.customer) && t.contacted_on).map((t) => t.contacted_on).sort().pop();
-        if (latest && latest > d.value) toast(`「${who}」への連絡を記録しましたが、他の利用者が ${latest} の連絡を記録済みのため、最終連絡日は ${latest} のままです。`, 'warn');
+        if (latest && latest > d.value) toast(`他の利用者が ${latest} の連絡を記録済みのため、今回の連絡（${d.value}）は「${who}」の最終連絡に反映されませんでした。`, 'warn');
         else toast(`「${who}」への連絡を記録しました`);
         await loadRecalls(gid); // 他の顧客の入力途中の内容は残す
         focusTo($(gid) || $('rclList'));
