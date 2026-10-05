@@ -42,7 +42,8 @@ const nw = (v) => `<span class="nowrap">${esc(v)}</span>`;
 const telLink = (v) => (v ? `<a href="tel:${esc(String(v).split(/\s*[（(]?\s*(?:内線|ext\.?|#)/i)[0].replace(/[^0-9+]/g, ''))}">${esc(v)}</a>` : '');
 const mailLink = (v) => (v ? `<a href="mailto:${esc(v)}">${esc(v)}</a>` : '');
 // 区切り（・）は前の項目に付ける：折り返したとき、行頭に「・」が来ないように
-const joinNw = (arr, sep) => { const xs = arr.filter((v) => v !== '' && v !== null && v !== undefined); return xs.map((v, i) => nw(String(v) + (i < xs.length - 1 ? sep || ' ／ ' : ''))).join(''); }; // 名前の中の「・」と区別できる区切り
+// 区切りの前は改行しない空白（\u00a0）：「／」だけが次の行に送られないように
+const joinNw = (arr, sep) => { const xs = arr.filter((v) => v !== '' && v !== null && v !== undefined); return xs.map((v, i) => nw(String(v) + (i < xs.length - 1 ? sep || '\u00a0／ ' : ''))).join(''); }; // 名前の中の「・」と区別できる区切り
 
 function storage(read, value) {
   try {
@@ -1673,7 +1674,7 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
       const same = s.shipment_no === S.rtNo, keepForm = same && !keepMsg ? captureReturnForm() : null; // 同じ出荷の検索し直しでは、入力中のフォームをそのまま残す
       if (!same && fromUrl && S.rtNo && unsavedScreens().includes('返品登録')) toast(`出荷 ${S.rtNo} の入力途中の内容は、「進む」で戻せます`);
       $('rtForm').hidden = true; S.returnLine = null; S.rtNo = s.shipment_no;
-      $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
+      $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>\u00a0／ ${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
         <button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の出荷を選ぶ</button></div>` +
         table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
           s.lines.map((l) => ({ attrs: rowAlert(l.lot_status_code), cells: [html(esc(l.product)), html(mono(l.lot_no)), html(badge(l.lot_status_code, l.lot_status)), num(l.quantity), num(l.returned), num(l.returnable),
@@ -1799,7 +1800,7 @@ async function loadReturnRecent() {
   if ($('rtShipment').innerHTML) { $('rtShipment').innerHTML = ''; $('rtForm').hidden = true; S.returnLine = null; S.rtNo = ''; $('rtShipNo').value = ''; alertBox('rtMsg', ''); alertBox('rtFindMsg', ''); }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
   $('rtRecent').innerHTML = `<h3 class="section-title">最近の出荷</h3>` + table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '', cls: 'actions' }],
-    list.map((s) => ({ cells: [html(mono(s.shipment_no) + `<div class="card-sub">${esc(s.lines.map((l) => l.product + " ×" + l.quantity).join("、"))}</div>`), s.shipped_on, s.customer,
+    list.map((s) => ({ cells: [html(mono(s.shipment_no) + `<div class="card-sub">${esc(Object.entries(s.lines.reduce((m, l) => { m[l.product] = (m[l.product] || 0) + Number(l.quantity); return m; }, {})).map(([pn, q]) => pn + ' ×' + q).join('、'))}</div>`), s.shipped_on, s.customer,
       html(`<button type="button" class="btn btn-secondary btn-sm" data-action="pickReturnShipment" data-no="${esc(s.shipment_no)}">この出荷を選ぶ</button>`)] })),
     { empty: '返品できる出荷はありません', emptyIcon: 'truck' });
 }
@@ -1844,7 +1845,7 @@ function selectReturnLine(btn, quiet) {
   $('rtDisp').value = recall ? 'DISPOSE' : '';
   $('rtDisp').disabled = recall;
   $('rtRLocWrap').hidden = true;
-  if (recall) $('rtLineInfo').innerHTML += '・' + nw('回収中のため回収品として登録（処置は廃棄）');
+  if (recall) $('rtLineInfo').innerHTML = joinNw(btn.dataset.label.split('／').concat(['返品可能 ' + btn.dataset.max, '回収中のため回収品として登録（処置は廃棄）']));
   $('rtForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (!quiet) setTimeout(() => $('rtQty').focus({ preventScroll: true }), 300);
 }
@@ -2259,7 +2260,7 @@ function renderRecall(r) {
     const st = !openTs.length && ts.every((t) => Number(t.shipped_qty) === 0) ? ['CLOSED', '対象外'] : !openTs.length ? ['RECOVERED', '対応済'] : openTs.some((t) => t.status === 'NOT_CONTACTED') ? ['NOT_CONTACTED', '未連絡'] : ['CONTACTED', '連絡済'];
     const gid = `cg_${r.id}_${t0.customer_id}`;
     const d0 = S.cfg.today; // 連絡はその日に記録することが多いので、今日の日付を入れておく（前回の連絡日は見出しに表示）
-    const m0 = last ? last.contact_method || '' : '';
+    const m0 = ''; // 方法も前回のものを引き継がない（新しい連絡ごとに選ぶ）
     const contactForm = ed && openTs.length ? `<div class="contact-form"><div class="field f-date"><label for="${gid}_d">連絡日</label><input type="date" id="${gid}_d" value="${esc(d0)}" data-orig="${esc(d0)}" min="${esc(r.started_on)}" max="${esc(S.cfg.today)}" aria-describedby="${gid}_e"></div>
         <div class="field"><label for="${gid}_m">連絡方法</label><select id="${gid}_m" data-orig="${esc(m0)}">${['', '電話', 'メール', '訪問'].map((m) => `<option value="${m}"${m === m0 ? ' selected' : ''}>${m || '未選択'}</option>`).join('')}</select></div>
         <button type="button" class="btn ${last ? 'btn-secondary' : 'btn-primary'}" data-action="saveContact" data-recall="${r.id}" data-customer="${t0.customer_id}" data-last="${esc(last ? last.contacted_on : '')}">${last ? '再度連絡を記録' : '連絡を記録'}</button>
@@ -2774,13 +2775,19 @@ const ACTIONS = {
     const gid = `cg_${el.dataset.recall}_${el.dataset.customer}`, d = $(gid + '_d');
     $(gid + '_e').textContent = ''; d.removeAttribute('aria-invalid');
     if (!d.value) { d.setAttribute('aria-invalid', 'true'); $(gid + '_e').textContent = '連絡日を入力してください。'; d.focus(); return; }
+    if (el.dataset.last && d.value < el.dataset.last) { // 前回より前の日付は記録しても最終連絡に反映されないので、先に止める
+      d.setAttribute('aria-invalid', 'true');
+      $(gid + '_e').textContent = `前回の連絡日（${el.dataset.last}）より前の日付です。最終連絡日・方法は変わらないため、記録できません。日付を確認してください。`;
+      d.focus(); return;
+    }
     await busy(el, async () => {
       try {
-        await api('recordRecallContact', { recallId: el.dataset.recall, customerId: el.dataset.customer, contactedOn: d.value, contactMethod: $(gid + '_m').value });
+        const rv = await api('recordRecallContact', { recallId: el.dataset.recall, customerId: el.dataset.customer, contactedOn: d.value, contactMethod: $(gid + '_m').value });
         const who = $(gid).querySelector('.t').firstChild.textContent;
         $('toasts').innerHTML = '';
-        // 前回より前の日付は最終連絡日を変えない（方法などは記録する）。そのことを伝える
-        if (el.dataset.last && d.value < el.dataset.last) toast(`「${who}」への連絡を記録しました。最終連絡日は ${el.dataset.last} のままです（入力した ${d.value} は前回より前のため）。`, 'warn');
+        // 他の利用者がもっと新しい連絡を記録していた（画面が古かった）ときは、そのことを伝える
+        const latest = (rv.targets || []).filter((t) => String(t.customer_id) === String(el.dataset.customer) && t.contacted_on).map((t) => t.contacted_on).sort().pop();
+        if (latest && latest > d.value) toast(`「${who}」への連絡を記録しましたが、他の利用者が ${latest} の連絡を記録済みのため、最終連絡日は ${latest} のままです。`, 'warn');
         else toast(`「${who}」への連絡を記録しました`);
         await loadRecalls(gid); // 他の顧客の入力途中の内容は残す
         focusTo($(gid) || $('rclList'));
