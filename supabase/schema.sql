@@ -390,12 +390,12 @@ begin
   raise exception using errcode = 'P0001', message = p_message;
 end $$;
 
-/** 文字列（前後の空白を除去、空なら null） */
 -- 全角の英数字・記号を半角・大文字に（日本語入力のまま打った番号でも検索できるように）
 create or replace function exo.half_code(v text) returns text language sql immutable set search_path = '' as $$
   select upper(translate(normalize(btrim(coalesce(v, '')), nfkc), 'ー－―‐−–—', '-------'))
 $$;
 
+/** 文字列（前後の空白を除去、空なら null） */
 create or replace function exo.j_text(p jsonb, k text) returns text
 language sql stable set search_path = '' as $$
   select case when p is null or jsonb_typeof(p) <> 'object' or jsonb_typeof(p -> k) is null or jsonb_typeof(p -> k) = 'null' then null

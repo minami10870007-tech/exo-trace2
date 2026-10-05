@@ -408,6 +408,16 @@ for (const vp of VIEWPORTS) {
     }
     await page.fill('.slQty', ''); await page.fill('#shNote', '');
   });
+  await step('他の利用者が追加した顧客が、画面を開き直すと出荷・マスタに出る', async () => {
+    psql(server.sb.db, "insert into exo.m_customer (customer_code, name, customer_type, address) values ('C900', '新規テスト顧客', 'OTHER', '東京都')");
+    try {
+      await page.evaluate(() => { S.mAt = 0; }); // 30秒経ったことにする
+      await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
+      await page.waitForFunction(() => [...document.getElementById('shCustomer').options].some((o) => /C900/.test(o.textContent)), null, { timeout: 10000 })
+        .catch(() => { throw new Error('出荷の顧客一覧に出ない'); });
+    } finally { psql(server.sb.db, "delete from exo.m_customer where customer_code = 'C900'"); await page.evaluate(() => { S.mAt = 0; }); }
+    await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
@@ -524,7 +534,8 @@ for (const vp of VIEWPORTS) {
   await step('処分：他の利用者が全部処分したら、記録できない状態にして「閉じる」だけにする', async () => {
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="inventory"]'); await idle(page);
-    const b = page.locator('#invBody [data-action="openDispose"]').first();
+    await page.waitForTimeout(500); // 在庫一覧の描き直しが終わってから、同じ行を固定して使う
+    const b = await page.locator('#invBody [data-action="openDispose"]').first().elementHandle();
     const lotId = await b.getAttribute('data-lot-id'), locId = await b.getAttribute('data-loc-id'), qty = await b.getAttribute('data-qty');
     if (await b.getAttribute('data-ok')) { await b.click(); await page.click('#dialogOk'); } else await b.click();
     await page.waitForSelector('#disposeDialog[open]');
