@@ -1338,7 +1338,7 @@ async function loadInspect(exceptId) {
       ${l.status_reason ? `<p class="note">理由：${esc(l.status_reason)}</p>` : ''}${action}</article>`;
   }).join('') : `<div class="card">${empty(f === 'QUARANTINE,HOLD' ? '検品待ち・保留中のロットはありません' : '対象のロットはありません', 'check')}
       <div class="empty-actions"><button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="receipt">入荷を登録する</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="shipment">出荷登録へ</button></div></div>`;
+      ${$('insMsg').querySelector('[data-page="shipment"]') ? '' : '<button type="button" class="btn btn-secondary btn-sm" data-action="go" data-page="shipment">出荷登録へ</button>'}</div></div>`;
   restoreInspect(snap);
 }
 
@@ -1387,6 +1387,7 @@ async function changeStatus(btn) {
       alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。` + (notes.length ? `\n同じ仕入先ロット「${r.supplier_lot_no}」について：` + notes.join('') : ''),
         shippable ? 'warn' : 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ')
           : sib.length ? `<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">ロット ${esc((shippable || sib[0]).lot_no)} を確認する</button>` : '');
+      if (r.status === 'RELEASED') { const dup = $('insBody').querySelector('.empty-actions [data-page="shipment"]'); if (dup) dup.remove(); } // 同じボタンを2つ並べない
     } catch (err) {
       // 他の利用者の変更などで状態が変わっている可能性があるので、最新の一覧に描き直す（入力中の内容は残す）
       const card0 = btn.closest('.lot-card');
@@ -1684,9 +1685,10 @@ async function findShipmentForReturn(e, keepMsg, fromUrl) {
       $('rtForm').hidden = true; S.returnLine = null; S.rtNo = s.shipment_no;
       $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>\u00a0／ ${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
         <button type="button" class="btn btn-secondary btn-sm" data-action="newReturn">別の出荷を選ぶ</button></div>` +
-        table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
+        table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済（回収含む）', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
           s.lines.map((l) => ({ attrs: rowAlert(l.lot_status_code), cells: [html(esc(l.product)), html(mono(l.lot_no)), html(badge(l.lot_status_code, l.lot_status)), num(l.quantity), num(l.returned), num(l.returnable),
-            l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.in_open_recall ? 1 : ''}" data-storage="${esc(l.storage_class)}">この明細を返品</button>`) : ''] })));
+            l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.in_open_recall ? 1 : ''}" data-storage="${esc(l.storage_class)}">この明細を返品</button>`) : ''] })))
+        + (s.lines.every((l) => !(l.returnable > 0)) ? `<p class="note">${s.status !== 'SHIPPED' ? 'この出荷は取消済みのため、返品できません。' : 'この出荷には返品できる明細がありません（すべて返品・回収済みです）。'}</p>` : '');
       $('rtRecent').innerHTML = '';
       // 再読み込みしても同じ出荷を開けるよう、出荷番号を URL に残す
       // 別の出荷に切り替えたときは履歴を積む（「戻る」で前の出荷に戻れるように）
@@ -2113,7 +2115,7 @@ async function searchLot(e, fromUrl) {
             ${fold ? `<div class="fold-hint">${icon('chev')}<span class="lbl-open">詳しく見る（販売先 ${customers}件・手元 ${fmt(net)}）</span><span class="lbl-close">閉じる</span></div>` : ''}</div>${badge(l.status, l.statusLabel)}</div>`;
         return `<article class="card lot-card">${fold ? `<details class="lot-fold"><summary>${head}</summary>` : head}
           <div class="stat-row"><div class="stat hl"><b>${fmt(net)}</b><span>顧客の手元</span></div><div class="stat"><b>${customers}</b><span>保有顧客数</span></div>
-            <div class="stat"><b>${fmt(l.stock)}</b><span>現在庫</span></div><div class="stat"><b>${esc(l.daysLeft)}</b><span>期限まで（日）</span></div></div>
+            <div class="stat"><b>${fmt(l.stock)}</b><span>現在庫</span></div><div class="stat"><b>${['RECALLED', 'REJECTED', 'VOID'].includes(l.status) || (!Number(l.stock) && !net) ? '—' : esc(l.daysLeft)}</b><span>期限まで（日）</span></div></div>
           <dl class="lot-meta"><div><dt>製造日</dt><dd>${esc(l.manufactured_on || '—')}</dd></div><div><dt>使用期限</dt><dd>${esc(l.expires_on)}</dd></div>
             <div><dt>初回入荷</dt><dd>${esc(l.received_on)}</dd></div><div><dt>原価単価</dt><dd>${fmt(l.unit_cost)} 円</dd></div></dl>
           <div class="chips">${Object.keys(l.movementTotals).filter((k) => !k.startsWith('TRANSFER_')).sort((a, b) => (Object.keys(MOVE_LABEL).indexOf(a) + 1 || 99) - (Object.keys(MOVE_LABEL).indexOf(b) + 1 || 99)).map((k) => `<span class="chip">${esc(MOVE_LABEL[k] || k)} ${fmt(Math.abs(l.movementTotals[k]))}</span>`).join('')}</div>
@@ -2961,7 +2963,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('input', (e) => {
   resetScopeOf(e.target); // 内容を変えたら別の依頼
   if (e.target.getAttribute && e.target.getAttribute('aria-invalid') === 'true' && (String(e.target.value || '').trim() || !e.target.required)) clearInvalid(e.target);
-  if (e.target.id === 'rcExp') e.target.dataset.manual = '1';
+  if (e.target.id === 'rcExp') { if (e.target.value) e.target.dataset.manual = '1'; else delete e.target.dataset.manual; } // 空に戻したら、また製造日から自動で入れる
   if (e.target.id === 'invFilter') renderInventory();
   if (e.target.closest && e.target.closest('#rtForm')) saveReturnDraft();
   // 数量を返品可能数の範囲に直したら、上に出ていた「超えています」の表示も消す
