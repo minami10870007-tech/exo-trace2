@@ -1582,7 +1582,9 @@ begin
     if v_unrec = 'NaN' or v_unrec < 0 or v_unrec <> trunc(v_unrec) or v_unrec > 1000000000 then
       perform exo.fail('回収不能数量は0以上の整数で入力してください。');
     end if;
-    if v_unrec + v_t.recovered_qty > v_t.shipped_qty then perform exo.fail('回収数量＋回収不能数量が出荷正味数量を超えています。'); end if;
+    if v_unrec + v_t.recovered_qty > v_t.shipped_qty then
+      perform exo.fail('回収不能数は最大 ' || greatest(v_t.shipped_qty - v_t.recovered_qty, 0) || ' です（出荷（返品後）' || v_t.shipped_qty || ' − 回収 ' || v_t.recovered_qty || '）。');
+    end if;
     v_t.unrecoverable_qty := v_unrec;
   end if;
   v_status := exo.j_text(p, 'status');

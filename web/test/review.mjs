@@ -411,7 +411,7 @@ for (const vp of VIEWPORTS) {
   await step('返品：返品可能数を超える数量でもフォームは消えない', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
     await page.fill('#rtShipNo', 'SH-202610-0003'); await page.click('#rtSearch button[type="submit"]'); await idle(page); await page.waitForTimeout(500);
-    await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
+    if (await page.isHidden('#rtForm')) await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
     await page.fill('#rtQty', '999'); await page.selectOption('#rtQLoc', { index: 1 }).catch(() => {}); await page.fill('#rtReason', 'テスト');
     if (!(await page.inputValue('#rtDisp')) && !(await page.isDisabled('#rtDisp'))) await page.selectOption('#rtDisp', 'DISPOSE');
     await page.click('#rtForm button[type="submit"]');
@@ -473,11 +473,25 @@ for (const vp of VIEWPORTS) {
     try {
       await page.click('#disposeForm button[value="ok"]'); await waitText('#dpMsg', /先に処分/);
       if (!(await page.isDisabled('#disposeForm button[value="ok"]'))) throw new Error('記録ボタンが押せる');
-      if (!/在庫 0（最新）/.test(await page.textContent('#disposeInfo'))) throw new Error('説明が古い: ' + (await page.textContent('#disposeInfo')));
+      if (!/在庫はもうありません/.test(await page.textContent('#disposeInfo'))) throw new Error('説明が古い: ' + (await page.textContent('#disposeInfo')));
       await page.click('#disposeForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('disposeDialog').open);
     } finally {
       psql(server.sb.db, `update exo.t_inventory set on_hand_qty = ${qty} where lot_id = ${lotId} and location_id = ${locId}`);
     }
+  });
+  await step('返品：明細を選ぶと数量欄にフォーカス、一部の番号で検索しても再読み込みで入力が戻る', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
+    await page.fill('#rtShipNo', '0003'); await page.click('#rtSearch button[type="submit"]'); await idle(page);
+    if ((await page.inputValue('#rtShipNo')) !== 'SH-202610-0003') throw new Error('正式な番号に置き換わらない');
+    await page.locator('#rtShipment [data-action="selectReturnLine"]:not([disabled])').first().click();
+    await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'rtQty', null, { timeout: 3000 }).catch(() => { throw new Error('数量欄にフォーカスが来ない'); });
+    await page.fill('#rtQty', '1'); await page.fill('#rtReason', '下書きテスト');
+    page.once('dialog', (d) => d.accept());
+    await page.reload(); await page.waitForSelector('#app:not([hidden])'); await idle(page); await page.waitForTimeout(500);
+    if ((await page.inputValue('#rtReason')) !== '下書きテスト' || await page.isHidden('#rtForm')) throw new Error('再読み込みで入力が戻らない');
+    await page.click('[data-action="cancelReturn"]');
+    await page.evaluate(() => { document.getElementById('rtReason').value = ''; document.getElementById('rtQty').value = ''; });
+    if (await page.evaluate(() => sessionStorage.getItem('exo-return-draft'))) throw new Error('キャンセルしても下書きが残る');
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
