@@ -745,7 +745,7 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
   .toasts, .guide-resume ~ .toasts, .guide-resume[hidden] ~ .toasts { top: calc(var(--topbar-h) + env(safe-area-inset-top) + 8px); bottom: auto; }
   .login { place-items: start center; padding-top: max(40px, env(safe-area-inset-top)); }
 }
-.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; padding-bottom: 16px; }
 #guideAfter:empty { display: none; }
 
 /* ---------- UX round 3 ---------- */
@@ -828,3 +828,4 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 #shDone:not(:empty) { margin-bottom: 8px; }
 .as-of { font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
 #invMsg .alert { margin: 0 0 12px; }
+#shDone td .mono, #shDone .mono { white-space: nowrap; overflow-wrap: normal; }

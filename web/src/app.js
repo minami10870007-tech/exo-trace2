@@ -510,6 +510,8 @@ function route() {
 }
 
 function showPage(id) {
+  // ブラウザの「戻る」などで画面が変わったら、開いている入力ダイアログを閉じる（裏の画面と食い違わないように）
+  ['disposeDialog', 'masterDialog'].forEach((d) => { if ($(d).open) $(d).close('cancel'); });
   const page = PAGES.find((p) => p.id === id);
   S.page = id;
   PAGES.forEach((p) => { $('page-' + p.id).hidden = p.id !== id; });
@@ -874,6 +876,7 @@ async function submitReceipt(e) {
 const NEXT = { QUARANTINE: ['RELEASED', 'HOLD', 'REJECTED'], RELEASED: ['HOLD'], HOLD: ['RELEASED', 'QUARANTINE', 'REJECTED'] };
 
 async function loadInspect() {
+  alertBox('insMsg', '', null, true);
   const f = S.inspectFilter;
   document.querySelectorAll('#insFilter button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.filter === f)));
   scrollFade($('insFilter'));
@@ -933,10 +936,9 @@ async function changeStatus(btn) {
     alertBox('insMsg', '');
     try {
       const r = await api('changeLotStatus', { lotId: id, to: $('to_' + id).value, reason: $('rs_' + id).value, coaConfirmed: $('coa_' + id).checked });
-      toast(`ロット ${r.lot_no} を「${r.statusLabel}」にしました`);
       guideAfterAction();
       await loadInspect();
-      focusTo($('insBody'));
+      alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。`, 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ') : '');
     } catch (err) {
       alertBox('insMsg', err.message, 'ng');
       $('insMsg').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1005,7 +1007,7 @@ async function submitShipment(e) {
     try {
       const s = await api('createShipment', { customerId: $('shCustomer').value, shippedOn: $('shDate').value, note: $('shNote').value, lines });
       alertBox('shMsg', '');
-      $('shDone').innerHTML = `<div class="alert alert-ok" role="status" tabindex="-1"><div class="alert-text">出荷を確定しました。出荷番号 <span class="mono">${esc(s.shipment_no)}</span>（${esc(s.customer)}）
+      $('shDone').innerHTML = `<div class="alert alert-ok" role="status" tabindex="-1" data-no="${esc(s.shipment_no)}"><div class="alert-text">出荷を確定しました。出荷番号 <span class="mono">${esc(s.shipment_no)}</span>（${esc(s.customer)}）
         <div class="alert-actions">${[...new Set(s.lines.map((l) => l.lot_no))].slice(0, 4).map((no) => `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(no)}">${esc(no)} を追跡</button>`).join('')}</div></div></div>` +
         table([{ label: '商品', cls: 'primary' }, 'ロット', { label: '使用期限', cls: 'nowrap' }, { label: '数量', cls: 'num' }, { label: '単価', cls: 'num' }],
           s.lines.map((l) => ({ cells: [html(esc(l.product)), html(mono(l.lot_no)), l.expires_on, num(l.quantity), num(l.unit_price)] })));
@@ -1082,6 +1084,9 @@ async function cancelShip(btn) {
     try {
       await api('cancelShipment', btn.dataset.id, reason);
       toast('出荷 ' + btn.dataset.no + ' を取消しました');
+      // 上部の「出荷を確定しました」がこの出荷なら、取消済みの表示に置き換える（誤解を防ぐ）
+      const done = $('shDone').firstElementChild;
+      if (done && done.dataset.no === btn.dataset.no) alertBox('shDone', `出荷 ${btn.dataset.no} は取消済みです（在庫に戻しました）。`, 'warn', true);
       await loadShipmentPage();
     } catch (err) { toast(err.message, 'ng'); }
   });
@@ -1132,7 +1137,15 @@ async function loadTraceRecent() {
 /** 返品画面：最近の出荷から選べるようにする */
 async function loadReturnRecent() {
   // 表示中の出荷があれば最新の状態で出し直す（回収などでロットの状態が変わっている場合があるため）
-  if ($('rtShipment').innerHTML && $('rtShipNo').value.trim()) { alertBox('rtFindMsg', ''); await findShipmentForReturn(null, false); return; }
+  if ($('rtShipment').innerHTML && $('rtShipNo').value.trim()) {
+    const line = !$('rtForm').hidden && S.returnLine, qty = $('rtQty').value;
+    alertBox('rtFindMsg', '');
+    await findShipmentForReturn(null, false);
+    // 入力途中だった明細は、まだ返品できるなら選び直して数量も戻す
+    const b = line && $('rtShipment').querySelector(`[data-action="selectReturnLine"][data-id="${line}"]`);
+    if (b) { selectReturnLine(b); if (qty && Number(qty) <= Number(b.dataset.max)) $('rtQty').value = qty; }
+    return;
+  }
   const list = (await api('getRecentShipments', 10)).filter((s) => s.status === 'SHIPPED');
   $('rtRecent').innerHTML = `<h3 class="section-title">最近の出荷</h3>` + table([{ label: '出荷番号', cls: 'primary' }, { label: '出荷日', cls: 'nowrap' }, { label: '顧客', cls: 'wide' }, { label: '', cls: 'actions' }],
     list.map((s) => ({ cells: [html(mono(s.shipment_no) + `<div class="card-sub">${esc(s.lines.map((l) => l.product + " ×" + l.quantity).join("、"))}</div>`), s.shipped_on, s.customer,
@@ -1337,7 +1350,7 @@ async function searchLot(e) {
           <ul class="timeline">${l.history.map((h) => `<li><b>${esc(code('lot_status', h.from_status) || '登録')} → ${esc(code('lot_status', h.to_status))}</b>　${esc(h.reason)}
             <div class="s">${esc(h.changed_at)}・${esc(h.changed_by)}</div></li>`).join('')}</ul>${fold ? '</details>' : ''}</article>`;
       }).join('') : `<div class="card">${empty('該当するロットはありません', 'search')}</div>`);
-      focusTo($('tlBody').firstElementChild);
+      focusTo($('tlBody').querySelector('.result-count') || $('tlBody').firstElementChild);
     } catch (err) {
       $('tlBody').innerHTML = `<div class="alert alert-ng" role="alert">${esc(err.message)}</div>`;
     }
@@ -1469,6 +1482,26 @@ async function submitRecall(e) {
   });
 }
 
+/** 回収対象の「進捗を更新」で入力中の内容（未保存）を控える／戻す。一覧を描き直しても消えないように */
+function snapshotTargetForms(exceptId) {
+  const snap = [];
+  $('rclList').querySelectorAll('.target-edit').forEach((d) => {
+    const fields = [...d.querySelectorAll('input, select')].filter((el) => !el.id.endsWith('_' + exceptId))
+      .filter((el) => (el.tagName === 'SELECT' ? ![...el.options].find((o) => o.selected && o.defaultSelected) : el.value !== el.defaultValue))
+      .map((el) => [el.id, el.value]);
+    if (fields.length || (d.open && !d.querySelector('[id$="_' + exceptId + '"]'))) snap.push({ id: d.querySelector('[data-action="saveTarget"]').dataset.id, open: d.open, fields });
+  });
+  return snap;
+}
+function restoreTargetForms(snap) {
+  snap.forEach((t) => {
+    const btn = $('rclList').querySelector(`[data-action="saveTarget"][data-id="${t.id}"]`);
+    if (!btn) return;
+    btn.closest('details').open = t.open || t.fields.length > 0;
+    t.fields.forEach(([id, v]) => { if ($(id)) $(id).value = v; });
+  });
+}
+
 async function saveTarget(btn) {
   const id = btn.dataset.id;
   const st = $('st_' + id);
@@ -1485,7 +1518,9 @@ async function saveTarget(btn) {
         unrecoverableQty: $('un_' + id).value, status: st ? st.value : '', closeReason: $('cr_' + id).value });
       $('toasts').innerHTML = '';
       toast('保存しました');
+      const snap = snapshotTargetForms(id);
       await loadRecalls();
+      restoreTargetForms(snap);
       focusTo($('tg_' + id));
     } catch (err) {
       $('cre_' + id).textContent = userText(err.message);

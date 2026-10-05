@@ -275,8 +275,8 @@ for (const vp of VIEWPORTS) {
     if (!(await btn.isDisabled())) throw new Error('COA未確認でボタンが押せる');
     await card.locator('input[type="checkbox"]').check();
     if ((await btn.textContent()).trim() !== '合格にする') throw new Error('ボタン文言: ' + (await btn.textContent()));
-    await btn.click(); await waitText('#toasts', /合格/);
-    if (!/合格/.test(await toastText())) throw new Error(await page.textContent('#insMsg'));
+    await btn.click(); await waitText('#insMsg', /合格|。/);
+    if (!/「合格」にしました/.test(await page.textContent('#insMsg'))) throw new Error(await page.textContent('#insMsg'));
   });
   await step('出荷（確認ダイアログ）', async () => {
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
@@ -311,6 +311,7 @@ for (const vp of VIEWPORTS) {
     await page.click('#bottomNav [data-page="shipment"]'); await idle(page);
     await page.click('[data-action="cancelShip"]'); await page.fill('#dialogInput', '数量誤り'); await page.click('#dialogOk'); await waitText('#toasts', /取消しました|。/);
     if (!/取消しました/.test(await toastText())) throw new Error('取消トーストなし');
+    if (!/取消済み/.test(await page.textContent('#shDone'))) throw new Error('上部の出荷完了表示が取消済みにならない');
   });
   await step('マスタ編集（フルスクリーンダイアログ）', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="master"]'); await idle(page);
@@ -348,6 +349,17 @@ for (const vp of VIEWPORTS) {
     if (!(await page.$('#tlBody .lot-card'))) throw new Error('結果が消えた');
     if (!/時点/.test(await page.textContent('#tlBody .as-of'))) throw new Error('時点の表示がない');
     void before;
+  });
+  await step('回収：ある顧客を保存しても、他の顧客の入力中の内容は消えない', async () => {
+    await page.click('#moreBtn'); await page.click('#sheetNav [data-page="recall"]'); await idle(page);
+    const forms = page.locator('#rclList .target-edit');
+    if ((await forms.count()) < 2) return; // 対象顧客が1件しかないデータでは確認しない
+    for (const i of [0, 1]) { const d = forms.nth(i); if (!(await d.getAttribute('open'))) await d.locator('summary').click(); }
+    await forms.nth(1).locator('input[id^="cr_"]').fill('入力途中のメモ');
+    await forms.nth(0).locator('select[id^="cm_"]').selectOption('メール');
+    await forms.nth(0).locator('[data-action="saveTarget"]').click(); await waitText('#toasts', /保存しました/); await idle(page);
+    const v = await page.locator('#rclList .target-edit').nth(1).locator('input[id^="cr_"]').inputValue();
+    if (v !== '入力途中のメモ') throw new Error('他の顧客の入力が消えた: ' + v);
   });
   await step('作成者がログインユーザーで記録される', async () => {
     const n = psql(server.sb.db, `select count(*) from exo.t_receipt where supplier_lot_no = 'FLOW-001' and created_by = '${DEMO_USER.email}'`);
