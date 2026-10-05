@@ -471,7 +471,7 @@ for (const vp of VIEWPORTS) {
     await page.selectOption('#dpKind', 'DISPOSE'); await page.fill('#dpQty', '1'); await page.fill('#dpReason', 'テスト');
     psql(server.sb.db, `update exo.t_inventory set on_hand_qty = 0 where lot_id = ${lotId} and location_id = ${locId}`);
     try {
-      await page.click('#disposeForm button[value="ok"]'); await waitText('#dpMsg', /先に処分/);
+      await page.click('#disposeForm button[value="ok"]'); await waitText('#dpMsg', /在庫が 0 になりました/);
       if (!(await page.isDisabled('#disposeForm button[value="ok"]'))) throw new Error('記録ボタンが押せる');
       if (!/在庫はもうありません/.test(await page.textContent('#disposeInfo'))) throw new Error('説明が古い: ' + (await page.textContent('#disposeInfo')));
       await page.click('#disposeForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('disposeDialog').open);

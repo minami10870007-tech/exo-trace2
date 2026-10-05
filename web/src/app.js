@@ -217,7 +217,15 @@ function clearInvalid(el) {
   // フォーム内の印がすべて消えたら、まとめのエラー表示も消す
   const form = el.closest('form');
   const msg = form && form.querySelector('[id$="Msg"]');
-  if (msg && msg.querySelector('.alert-ng') && !form.querySelector('[aria-invalid="true"]')) msg.innerHTML = '';
+  if (msg && msg.querySelector('.alert-ng')) {
+    const left = [...form.querySelectorAll('[aria-invalid="true"]')];
+    if (!left.length) msg.innerHTML = '';
+    else if (/^未入力の項目があります/.test(msg.textContent)) { // まだ残っている欄だけで一覧を作り直す
+      const req = left.filter((x) => x.required && !String(x.value || '').trim());
+      if (req.length) msg.querySelector('.alert-text').textContent = '未入力の項目があります：' + [...new Set(req.map(labelOf))].join('、');
+      else msg.innerHTML = '';
+    }
+  }
 }
 
 /** ラベルの文字（「任意」などの補足を除く） */
@@ -735,7 +743,8 @@ function renderGuide() {
   const work = g.key && !st[g.key] && g.key !== 'rules';
   $('guideGo').className = 'btn btn-block ' + (work ? 'btn-primary' : 'btn-secondary');
   $('guidePrev').hidden = i === 0;
-  $('guideNext').textContent = i === LAST ? (done ? 'はじめる' : `次の準備へ（${GUIDE[todo].short}）`)
+  document.querySelector('#guideDialog .guide-note').hidden = i === LAST && done;
+  $('guideNext').textContent = i === LAST ? (done ? '完了' : `次の準備へ（${GUIDE[todo].short}）`)
     : i === 0 ? (done ? '次へ' : todo > 1 ? `続きから（${GUIDE[todo].short}）` : 'はじめる') : '次へ';
   $('guideNext').className = 'btn ' + (work ? 'btn-secondary' : 'btn-primary');
   $('guideNext').dataset.jump = i === LAST && !done ? String(todo) : i === 0 && !done && todo > 1 ? String(todo) : '';
@@ -1288,7 +1297,9 @@ async function findShipmentForReturn(e, keepMsg) {
   const btn = e && e.submitter;
   await busy(btn, async () => {
     try {
-      const s = await api('getShipmentByNo', $('rtShipNo').value);
+      const asked = $('rtShipNo').value;
+      const s = await api('getShipmentByNo', asked);
+      if ($('rtShipNo').value !== asked) return; // 待っている間に別の番号が入力されたら、古い結果で上書きしない
       $('rtShipment').innerHTML = `<div class="ship-head"><p class="card-sub"><b class="mono">${esc(s.shipment_no)}</b>・${joinNw([s.shipped_on, s.customer])} ${s.status !== 'SHIPPED' ? badge('ng', '取消済') : ''}</p>
         <button type="button" class="btn btn-ghost btn-sm" data-action="newReturn">別の出荷を選ぶ</button></div>` +
         table([{ label: '商品', cls: 'primary' }, { label: 'ロット', cls: 'wide' }, { label: 'ロット状態', cls: 'status' }, { label: '出荷数', cls: 'num' }, { label: '返品済', cls: 'num' }, { label: '返品可能', cls: 'num' }, { label: '', cls: 'actions' }],
@@ -1296,7 +1307,10 @@ async function findShipmentForReturn(e, keepMsg) {
             l.returnable > 0 ? html(`<button type="button" class="btn btn-secondary btn-sm" data-action="selectReturnLine" data-id="${l.id}" data-max="${l.returnable}" data-label="${esc(l.product + '／' + l.lot_no)}" data-recall="${l.in_open_recall ? 1 : ''}" data-storage="${esc(l.storage_class)}">この明細を返品</button>`) : ''] })));
       $('rtRecent').innerHTML = '';
       // 再読み込みしても同じ出荷を開けるよう、出荷番号を URL に残す
-      history.replaceState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
+      // 別の出荷に切り替えたときは履歴を積む（「戻る」で前の出荷に戻れるように）
+      const prevNo = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
+      if (prevNo && decodeURIComponent(prevNo) !== s.shipment_no) history.pushState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
+      else history.replaceState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
       $('rtShipNo').value = s.shipment_no; // 一部だけ入力された番号は、見つかった正式な番号に置き換える（下書きの保存・復元を合わせるため）
       if (!keepMsg) focusTo($('rtShipment').querySelector('.card-sub'));
     } catch (err) {
@@ -1310,6 +1324,8 @@ async function findShipmentForReturn(e, keepMsg) {
 
 /** ロット追跡：最近入荷したロットをすぐ選べるようにする */
 async function loadTraceRecent() {
+  const q = (location.hash.match(/[?&]q=([^&]+)/) || [])[1];
+  if (q && !$('tlBody').querySelector('.lot-card') && !$('tlQuery').value.trim()) { $('tlQuery').value = decodeURIComponent(q); await searchLot({ preventDefault() {}, submitter: null }); return; }
   // 結果を表示中なら最新の状態で検索し直す（返品・回収・処分で数量が変わっている場合があるため）
   if ($('tlBody').querySelector('.lot-card') && $('tlQuery').value.trim()) { await searchLot({ preventDefault() {}, submitter: null }); return; }
   const lots = (await api('getLots', [])).sort((a, b) => String(b.received_on).localeCompare(String(a.received_on)) || b.id - a.id).slice(0, 8);
@@ -1344,7 +1360,7 @@ function restoreReturnForm(saved) {
 
 async function loadReturnRecent() {
   const fromUrl = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
-  if (fromUrl && !$('rtShipment').innerHTML) {
+  if (fromUrl && (!$('rtShipment').innerHTML || decodeURIComponent(fromUrl) !== $('rtShipNo').value.trim().toUpperCase())) {
     $('rtShipNo').value = decodeURIComponent(fromUrl);
     await findShipmentForReturn(null, false);
     try { // 再読み込み前の入力途中の内容があれば戻す
@@ -1499,7 +1515,7 @@ function renderInventory() {
 /** 処分ダイアログの在庫数まわりの表示（説明・上限・全数ボタン）をまとめて更新する */
 function setDisposeStock(qty, latest) {
   const f = $('disposeForm'), n = Number(qty);
-  $('disposeInfo').textContent = n <= 0 ? `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫はもうありません（他の利用者が処分済みです）。`
+  $('disposeInfo').textContent = n <= 0 ? `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫はもうありません（他の利用者の出荷・処分などで在庫が 0 になりました）。`
     : `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫 ${fmt(n)}${latest ? '（最新）' : ''} から、処分した数量を記録します。記録すると在庫から差し引かれ、元に戻せません。`;
   $('dpQty').max = n;
   $('dpQtyHint').textContent = `最大 ${fmt(n)}${latest ? '（最新）' : ''}`;
@@ -1560,13 +1576,13 @@ async function submitDispose(e) {
         loadInventory().catch(() => {});
         if (Number(left) === 0) {
           f.dataset.dirty = '';
-          alertBox('dpMsg', '他の利用者がこのロットを先に処分しました（在庫 0）。これ以上処分する在庫はありません。「閉じる」で戻ってください。', 'warn');
+          alertBox('dpMsg', '他の利用者の出荷・処分などで、このロットの在庫が 0 になりました。処分する在庫はありません。「閉じる」で戻ってください。', 'warn');
           f.querySelector('[data-action="dialogCancel"]').focus();
           return;
         }
         $('dpQty').value = left; // 最新の上限まで入れておく（確認して記録できるように）
         $('dpQty').setAttribute('aria-invalid', 'true');
-        alertBox('dpMsg', `他の利用者が先に処分したため、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng');
+        alertBox('dpMsg', `他の利用者の出荷・処分などで、在庫が ${fmt(left)} に減っています。数量を確認してください。`, 'ng');
         return;
       }
       alertBox('dpMsg', err.message, 'ng');
@@ -1590,6 +1606,7 @@ async function searchLot(e) {
   await busy(e.submitter, async () => {
     try {
       const lots = await api('traceLot', $('tlQuery').value);
+      history.replaceState(null, '', '#/traceLot?q=' + encodeURIComponent($('tlQuery').value.trim())); // 再読み込みしても同じ検索を出せるように
       const fold = lots.length > 1; // 複数見つかったときは、見出しだけを並べて開いて見る
       if (lots.length) $('tlRecent').innerHTML = ''; // 見つからなかったときは「最近のロット」を残す
       $('tlBody').innerHTML = (lots.length ? `<p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retrace">${icon('refresh')}最新にする</button></p><p class="result-count" role="status">${lots.length}件見つかりました${lots.length >= 20 ? '（先頭20件。番号をもう少し詳しく入れると絞り込めます）' : ''}</p>` : '') + (lots.length ? lots.map((l) => {
@@ -2096,7 +2113,7 @@ const ACTIONS = {
   clearInvPreset: () => { S.invPreset = ''; renderInventory(); focusTo($('invFilter')); },
   newReturn: () => {
     $('rtShipNo').value = ''; $('rtShipment').innerHTML = ''; alertBox('rtFindMsg', ''); $('rtForm').hidden = true;
-    history.replaceState(null, '', '#/return');
+    history.pushState(null, '', '#/return'); // 「戻る」で直前の出荷に戻れるように
     try { sessionStorage.removeItem('exo-return-draft'); } catch (e) { /* 何もしない */ }
     loadReturnRecent().then(() => focusTo($('rtShipNo'))).catch((err) => toast(err.message, 'ng'));
   },
