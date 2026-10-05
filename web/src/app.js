@@ -228,6 +228,17 @@ function clearInvalid(el) {
   }
 }
 
+/** プログラムで値を入れた欄も、入力済みなら印を消す（イベントが起きないため） */
+function setValue(el, v) {
+  el.value = v;
+  if (el.getAttribute('aria-invalid') === 'true' && String(el.value || '').trim()) clearInvalid(el);
+}
+/** フォーム内の印（赤枠・欄の下のメッセージ）をすべて消す */
+function clearMarks(form) {
+  form.querySelectorAll('[aria-invalid]').forEach((x) => x.removeAttribute('aria-invalid'));
+  form.querySelectorAll('.req-err').forEach((x) => x.remove());
+}
+
 /** ラベルの文字（「任意」などの補足を除く） */
 function labelOf(el) {
   const lab = el.id && document.querySelector(`label[for="${el.id}"]`);
@@ -243,7 +254,7 @@ function checkRequired(container, msgId, extra) {
   const missing = [];
   container.querySelectorAll('[required]').forEach((el) => {
     if (el.closest('[hidden]') || el.disabled) return;
-    if (String(el.value || '').trim()) el.removeAttribute('aria-invalid'); else missing.push(el);
+    if (String(el.value || '').trim()) { el.removeAttribute('aria-invalid'); const r = el.closest('.field') && el.closest('.field').querySelector('.req-err'); if (r) r.remove(); } else missing.push(el);
   });
   (extra || []).forEach((el) => { if (!missing.includes(el)) missing.push(el); });
   if (!missing.length) return true;
@@ -943,7 +954,7 @@ function fillReceiptLocations() {
   $('rcProductInfo').innerHTML = p ? joinNw([p.name, '保管 ' + code('storage_class', p.storage_class), '有効期間 ' + p.shelf_life_days + '日']) : '';
   const locs = active(S.M.locations).filter((l) => String(l.is_quarantine) !== 'true' && (!p || l.storage_class === p.storage_class));
   $('rcLoc').innerHTML = options(locs, 'id', (l) => l.name + '（' + l.location_code + '）', locs.length ? '選択してください' : '該当する保管場所がありません');
-  if (locs.length === 1) $('rcLoc').value = locs[0].id;
+  if (locs.length === 1) setValue($('rcLoc'), locs[0].id);
 }
 
 function autoExpiry() {
@@ -952,7 +963,7 @@ function autoExpiry() {
   if (p && mfg && !$('rcExp').dataset.manual) {
     const d = new Date(mfg + 'T00:00:00Z');
     d.setUTCDate(d.getUTCDate() + Number(p.shelf_life_days || 0));
-    $('rcExp').value = d.toISOString().slice(0, 10);
+    setValue($('rcExp'), d.toISOString().slice(0, 10));
   }
 }
 
@@ -987,6 +998,7 @@ async function submitReceipt(e) {
       alertBox('rcMsg', `入荷を登録しました。\n入荷番号 ${r.receiptNo}／社内ロット番号 ${r.lotNo}（検品待ち）` + (r.warning ? '\n⚠ ' + r.warning : ''), r.warning ? 'warn' : 'ok', false,
         goBtn('inspect', '検品へ進む'));
       ['rcSupLot', 'rcMfg', 'rcExp', 'rcQty', 'rcPrice', 'rcTemp'].forEach((id) => { $(id).value = ''; });
+      clearMarks($('receiptForm'));
       delete $('rcExp').dataset.manual;
       guideAfterAction();
     } catch (err) {
@@ -1088,11 +1100,13 @@ async function changeStatus(btn) {
     } catch (err) {
       // 他の利用者の変更などで状態が変わっている可能性があるので、最新の一覧に描き直す（入力中の内容は残す）
       const card0 = btn.closest('.lot-card');
+      const reason0 = $('rs_' + id) ? $('rs_' + id).value : '';
       const lotNo0 = card0 ? card0.querySelector('.lot-no').textContent : '';
       await loadInspect().catch(() => {});
       const gone = /他の利用者/.test(err.message) && !$('to_' + id);
       if (gone) S.insFocusLot = lotNo0;
-      alertBox('insMsg', gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + 'このロットは今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message, 'ng', false,
+      const typed = !$('rs_' + id) && reason0.trim() ? `\n入力していた理由：${reason0.trim()}` : ''; // 欄が消えても、入力した理由を写せるように
+      alertBox('insMsg', (gone ? err.message.replace(/最新の状態を表示しました。.*$/, '') + 'このロットは今の表示条件に当てはまらなくなったため、一覧から外れました。' : err.message) + typed, 'ng', false,
         gone ? '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>' : '');
     }
   });
@@ -1308,14 +1322,16 @@ async function findShipmentForReturn(e, keepMsg) {
       $('rtRecent').innerHTML = '';
       // 再読み込みしても同じ出荷を開けるよう、出荷番号を URL に残す
       // 別の出荷に切り替えたときは履歴を積む（「戻る」で前の出荷に戻れるように）
-      const prevNo = (location.hash.match(/[?&]no=([^&]+)/) || [])[1];
-      if (prevNo && decodeURIComponent(prevNo) !== s.shipment_no) history.pushState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
-      else history.replaceState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
+      // （最近の出荷から選んだときも積むので、「戻る」で一覧に戻れる）
+      const prevNo = decodeURIComponent((location.hash.match(/[?&]no=([^&]+)/) || [])[1] || '');
+      const onPage = S.page === 'return'; // 待っている間に別の画面へ移っていたら、URL・フォーカスは変えない
+      if (onPage && prevNo !== s.shipment_no && prevNo.toUpperCase() !== asked.trim().toUpperCase()) history.pushState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
+      else if (onPage) history.replaceState(null, '', '#/return?no=' + encodeURIComponent(s.shipment_no));
       $('rtShipNo').value = s.shipment_no; // 一部だけ入力された番号は、見つかった正式な番号に置き換える（下書きの保存・復元を合わせるため）
-      if (!keepMsg) focusTo($('rtShipment').querySelector('.card-sub'));
+      if (!keepMsg && onPage) focusTo($('rtShipment').querySelector('.card-sub'));
     } catch (err) {
       $('rtShipment').innerHTML = '';
-      history.replaceState(null, '', '#/return');
+      if (S.page === 'return') history.replaceState(null, '', '#/return');
       await loadReturnRecent().catch(() => {}); // 見つからないときは最近の出荷から選べるようにする
       alertBox('rtFindMsg', /一覧から選んで/.test(err.message) ? err.message : err.message + '\n出荷番号を確かめるか、下の「最近の出荷」から選んでください。', 'ng');
     }
@@ -1325,11 +1341,14 @@ async function findShipmentForReturn(e, keepMsg) {
 /** ロット追跡：最近入荷したロットをすぐ選べるようにする */
 async function loadTraceRecent() {
   const q = (location.hash.match(/[?&]q=([^&]+)/) || [])[1];
-  if (q && !$('tlBody').querySelector('.lot-card') && !$('tlQuery').value.trim()) { $('tlQuery').value = decodeURIComponent(q); await searchLot({ preventDefault() {}, submitter: null }); return; }
+  if (q && !$('tlBody').querySelector('.lot-card') && !$('tlQuery').value.trim()) {
+    $('tlQuery').value = decodeURIComponent(q); await searchLot({ preventDefault() {}, submitter: null });
+    if ($('tlBody').querySelector('.lot-card')) return;
+  }
   // 結果を表示中なら最新の状態で検索し直す（返品・回収・処分で数量が変わっている場合があるため）
   if ($('tlBody').querySelector('.lot-card') && $('tlQuery').value.trim()) { await searchLot({ preventDefault() {}, submitter: null }); return; }
   const lots = (await api('getLots', [])).sort((a, b) => String(b.received_on).localeCompare(String(a.received_on)) || b.id - a.id).slice(0, 8);
-  if ($('tlQuery').value.trim()) return; // 読み込み中に検索された
+  if ($('tlBody').querySelector('.lot-card')) return; // 読み込み中に検索された
   $('tlRecent').innerHTML = lots.length ? `<h3 class="section-title">最近のロット</h3><div class="recent-chips">${lots.map((l) =>
     `<button type="button" class="btn btn-secondary btn-sm" data-action="traceLotNo" data-lot="${esc(l.lot_no)}">${esc(l.lot_no)}</button>`).join('')}</div>` : '';
 }
@@ -1515,7 +1534,7 @@ function renderInventory() {
 /** 処分ダイアログの在庫数まわりの表示（説明・上限・全数ボタン）をまとめて更新する */
 function setDisposeStock(qty, latest) {
   const f = $('disposeForm'), n = Number(qty);
-  $('disposeInfo').textContent = n <= 0 ? `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫はもうありません（他の利用者の出荷・処分などで在庫が 0 になりました）。`
+  $('disposeInfo').textContent = n <= 0 ? `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫はもうありません。`
     : `ロット ${f.dataset.lot}（${f.dataset.loc}）の在庫 ${fmt(n)}${latest ? '（最新）' : ''} から、処分した数量を記録します。記録すると在庫から差し引かれ、元に戻せません。`;
   $('dpQty').max = n;
   $('dpQtyHint').textContent = `最大 ${fmt(n)}${latest ? '（最新）' : ''}`;
@@ -1606,7 +1625,11 @@ async function searchLot(e) {
   await busy(e.submitter, async () => {
     try {
       const lots = await api('traceLot', $('tlQuery').value);
-      history.replaceState(null, '', '#/traceLot?q=' + encodeURIComponent($('tlQuery').value.trim())); // 再読み込みしても同じ検索を出せるように
+      if (S.page === 'traceLot') { // 待っている間に別の画面へ移っていたら、URL は変えない
+        // 再読み込みしても同じ検索を出せるように URL に残す。別のロットに切り替えたら履歴を積む（「戻る」で前のロットへ）
+        const prevQ = (location.hash.match(/[?&]q=([^&]+)/) || [])[1], newHash = '#/traceLot?q=' + encodeURIComponent($('tlQuery').value.trim());
+        if (prevQ && decodeURIComponent(prevQ) !== $('tlQuery').value.trim()) history.pushState(null, '', newHash); else history.replaceState(null, '', newHash);
+      }
       const fold = lots.length > 1; // 複数見つかったときは、見出しだけを並べて開いて見る
       if (lots.length) $('tlRecent').innerHTML = ''; // 見つからなかったときは「最近のロット」を残す
       $('tlBody').innerHTML = (lots.length ? `<p class="as-of">${esc(nowText())} 時点<button type="button" class="btn btn-ghost btn-sm" data-action="retrace">${icon('refresh')}最新にする</button></p><p class="result-count" role="status">${lots.length}件見つかりました${lots.length >= 20 ? '（先頭20件。番号をもう少し詳しく入れると絞り込めます）' : ''}</p>` : '') + (lots.length ? lots.map((l) => {
@@ -1649,6 +1672,12 @@ const nowText = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo',
 
 /** 顧客追跡：表示中の結果があれば、開き直したときに最新の状態で出し直す */
 async function loadCustomerTrace() {
+  const qs = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (qs.get('c') && !$('tcBody').querySelector('.card') && !$('tcCustomer').value) { // 再読み込み前の検索を出し直す
+    $('tcCustomer').value = qs.get('c'); $('tcFrom').value = qs.get('from') || ''; $('tcTo').value = qs.get('to') || '';
+    if ($('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null });
+    return;
+  }
   if ($('tcBody').querySelector('.card') && $('tcCustomer').value) await searchCustomer({ preventDefault() {}, submitter: null });
 }
 
@@ -1678,8 +1707,14 @@ async function searchCustomer(e) {
           r.rows.map((x) => ({ attrs: ` class="clickable${ALERT_STATUS.has(x.lot_status) ? ' is-alert' : ''}" data-action="traceLotNo" data-lot="${esc(x.lot_no)}" tabindex="0" aria-label="${esc(x.lot_no)} を追跡"`, cells: [html(mono(x.lot_no)), x.product, x.shipped_on, html(mono(x.shipment_no)),
             x.expires_on, html(badge(x.lot_status, x.lot_status_label)), num(x.quantity), num(x.returned), num(x.net)] })),
           { empty: '出荷実績はありません', emptyIcon: 'truck' })}</div>`;
-      $('tcBody').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      focusTo($('tcBody').querySelector('.card-title'));
+      if (S.page === 'traceCustomer') {
+        const qs = new URLSearchParams({ c: $('tcCustomer').value }); // 再読み込みしても同じ検索を出せるように
+        if ($('tcFrom').value) qs.set('from', $('tcFrom').value);
+        if ($('tcTo').value) qs.set('to', $('tcTo').value);
+        history.replaceState(null, '', '#/traceCustomer?' + qs);
+        $('tcBody').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        focusTo($('tcBody').querySelector('.card-title'));
+      }
     } catch (err) {
       $('tcBody').innerHTML = `<div class="alert alert-ng" role="alert">${esc(err.message)}</div>`;
     }
@@ -2179,7 +2214,7 @@ document.addEventListener('change', (e) => {
   if (t.id === 'mf_customer_type') syncMedicalCode();
   if (t.classList.contains('slProd')) {
     const p = S.M.products.find((x) => String(x.id) === t.value);
-    t.closest('.line').querySelector('.slPrice').value = p ? p.list_price : '';
+    setValue(t.closest('.line').querySelector('.slPrice'), p ? p.list_price : '');
     updateLineAvail(t.closest('.line'), true);
   } else if (t.classList.contains('ruleChk')) {
     saveRule(t);

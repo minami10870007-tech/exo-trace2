@@ -840,3 +840,7 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 
 /* ---------- UX round 14 ---------- */
 @media (max-width: 479.98px) { #msTabs { flex-wrap: wrap; -webkit-mask-image: none; mask-image: none; } #msTabs button { flex: 1 1 30%; } }
+
+/* ---- UX round 18 ---- */
+.bottom-nav button { white-space: nowrap; padding: 0 2px; }
+#disposeForm button[value="ok"]:disabled { opacity: 1; background: var(--surface-2); color: var(--text-3); border-color: var(--border); box-shadow: none; }
