@@ -868,3 +868,9 @@ select { max-width: 100%; }
 .contact-form .btn, .contact-form .span-all { grid-column: 1 / -1; }
 @media (min-width: 768px) { .contact-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; } .contact-form .f-date { grid-column: auto; } .contact-form .btn { grid-column: auto; } }
 .inplace-alert { margin: 0; }
+
+/* ---- UX round 61 ---- */
+.cust-group { grid-template-columns: minmax(0, 1fr); }
+.target-head > div { min-width: 0; }
+.target-head .mono { overflow-wrap: anywhere; }
+.form-actions .btn { white-space: normal; max-width: 100%; }

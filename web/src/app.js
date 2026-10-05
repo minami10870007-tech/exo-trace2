@@ -263,6 +263,9 @@ function focusTo(el) {
   if (!el) return;
   if (!el.matches('a[href], button, input, select, textarea, [tabindex]')) el.tabIndex = -1;
   el.focus({ preventScroll: true });
+  // 描き直しで位置が変わり、フォーカスした所が画面の外（上の帯・下のメニューの裏を含む）に出たら、見える位置まで動かす
+  const r = el.getBoundingClientRect(), top = 64, bottom = window.innerHeight - 72;
+  if (el !== $('main') && (r.bottom < top || r.top > bottom)) el.scrollIntoView({ block: r.height > bottom - top ? 'start' : 'nearest' });
 }
 
 /** 結果・エラーの表示。actions: 次の操作のボタン（HTML）。noScroll: 位置とフォーカスを動かさない */
@@ -560,7 +563,7 @@ function unsavedScreens() {
   if (['rcSupLot', 'rcQty', 'rcPrice', 'rcMfg'].some((id) => $(id).value.trim()) || ($('rcExp').value && $('rcExp').dataset.manual)) list.push('入荷登録');
   if ($('shNote').value.trim() || [...document.querySelectorAll('#shLines .slQty')].some((el) => el.value.trim())) list.push('出荷登録');
   if (!$('rtForm').hidden && ($('rtQty').value || $('rtReason').value.trim() !== ($('rtReason').dataset.orig || ''))) list.push('返品登録');
-  if ($('rcTitle').value.trim() || $('rcReason').value.trim() || snapshotTargetForms().some((t) => t.fields.length)) list.push('回収管理');
+  if ($('rcTitle').value.trim() || $('rcReason').value.trim() || $('rcLots').querySelector('input:checked') || snapshotTargetForms().some((t) => t.fields.length)) list.push('回収管理');
   if (snapshotInspect().length) list.push('受入検品');
   if ($('masterDialog').open && $('masterForm').dataset.dirty === '1') list.push('マスタ編集');
   if ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1') list.push('在庫の処分');
@@ -2313,7 +2316,8 @@ async function submitRecall(e) {
       $('rcNew').open = false;
       await loadRecalls();
       alertBox('rclMsg', createdMsg, 'ok', true);
-      focusTo($('rclList').firstElementChild);
+      $('rclMsg').scrollIntoView({ block: 'start' }); // 登録のお知らせ（分納分を含めたことなど）と新しい案件を見せる
+      focusTo($('rclMsg').firstElementChild || $('rclList').firstElementChild);
     } catch (err) {
       alertBox('rclFormMsg', err.message, 'ng');
     }
@@ -2418,9 +2422,10 @@ async function saveTarget(btn) {
 async function recallFailed(err, id) {
   if (!S.sess) return; // ログアウトした（期限切れ）：ログイン画面が説明している
   const fresh = await loadRecalls().then(() => true, () => false);
+  err = { message: err.message.replace(/[。]?$/, '。'), unsure: err.unsure }; // 括弧が重ならないように
   const card = $('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
   if (err.unsure && fresh && card && !card.querySelector('[data-action="closeRecall"]') && /完了/.test(card.textContent)) toast('回収案件の完了は記録されていました');
-  else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
+  else toast(err.message + (fresh ? '最新の状態を表示しました。' : ''), 'ng');
   const a = $('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
   if (a) a.scrollIntoView({ block: 'start' });
   focusTo(a || $('rclList'));
