@@ -849,3 +849,11 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .toast { pointer-events: none; } .toast button { pointer-events: auto; } /* お知らせの下の画面も押せるように（ボタンだけ押せる） */
 .unset { color: var(--text-3); font-weight: 400; }
 .loc-hint { margin-top: 8px; }
+
+/* ---- UX round 53：長い名前・多数のロットでも横にはみ出さない ---- */
+.card-sub .nowrap, .field-hint .nowrap, small .nowrap, .lot-head .nowrap, .alert-text .nowrap, .s .nowrap {
+  display: inline-block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; vertical-align: top;
+}
+.form-grid > *, .field { min-width: 0; }
+select { max-width: 100%; }
+.lot-list { display: inline; }

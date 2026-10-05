@@ -1352,10 +1352,16 @@ async function changeStatus(btn) {
         expectedStatus: $('to_' + id).dataset.status });
       guideAfterAction();
       await loadInspect(id);
-      const sib = r.siblings || [];
-      alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。` +
-        (sib.length ? `\n同じ仕入先ロット「${r.supplier_lot_no}」の ${sib.map((x) => `${x.lot_no}（${x.statusLabel}）`).join('、')} は、そのまま出荷できる状態です。同じ問題が疑われる場合は、保留にしてください。` : ''),
-        sib.length ? 'warn' : 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ') : sib.length ? '<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">「すべて」で確認する</button>' : '');
+      // 不合格にしたとき：同じ仕入先ロットの他の社内ロットの状態ごとに案内する
+      const sib = r.siblings || [], by = (st) => sib.filter((x) => x.status === st).map((x) => x.lot_no).join('、');
+      const notes = [by('RELEASED') && `${by('RELEASED')}（合格）は出荷できる状態です。同じ問題が疑われる場合は、保留にしてください。`,
+        by('QUARANTINE') && `${by('QUARANTINE')}は検品待ちです。判定の際に同じ点を確認してください。`,
+        by('HOLD') && `${by('HOLD')}は保留中です。`].filter(Boolean);
+      const shippable = sib.find((x) => x.status === 'RELEASED');
+      if (sib.length) S.insFocusLot = (shippable || sib[0]).lot_no;
+      alertBox('insMsg', `ロット ${r.lot_no} を「${r.statusLabel}」にしました。` + (notes.length ? `\n同じ仕入先ロット「${r.supplier_lot_no}」について：` + notes.join('') : ''),
+        shippable ? 'warn' : 'ok', false, r.status === 'RELEASED' ? goBtn('shipment', '出荷登録へ')
+          : sib.length ? `<button type="button" class="btn btn-secondary btn-sm" data-action="insShowAll">ロット ${esc((shippable || sib[0]).lot_no)} を確認する</button>` : '');
     } catch (err) {
       // 他の利用者の変更などで状態が変わっている可能性があるので、最新の一覧に描き直す（入力中の内容は残す）
       const card0 = btn.closest('.lot-card');
@@ -2228,7 +2234,7 @@ function renderRecall(r) {
   }).join('') : empty('対象顧客はいません（出荷実績なし）', 'check');
   const rate = (v) => (r.activeTargets ? v + '%' : '—');
   return `<article class="card" data-id="${r.id}"><div class="card-head"><div><span class="eyebrow">${esc(r.recall_no)}</span><h2 class="card-title">${esc(r.title)}</h2>
-      <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : '', '対象ロット ' + r.lots.join(', ')])}</p></div>
+      <p class="card-sub">${joinNw(['クラス' + r.severity, '開始 ' + r.started_on, r.closed_on ? '完了 ' + r.closed_on : ''])}<br>対象ロット <span class="lot-list">${r.lots.map(nw).join('、')}</span></p></div>
       ${badge(r.status, RECALL_STATUS[r.status] || r.status)}</div>
     <p class="note">${esc(r.reason)}</p>
     <div class="stat-row three"><div class="stat"><b>${rate(r.contactedRate)}</b><span>連絡済率</span></div><div class="stat${r.activeTargets && r.recQty >= r.shippedQty ? ' hl' : ''}"><b>${rate(r.recoveredRate)}</b><span>回収率</span></div>

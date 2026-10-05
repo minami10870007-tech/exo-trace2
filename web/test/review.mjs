@@ -560,6 +560,29 @@ for (const vp of VIEWPORTS) {
     });
     if (n < 1) throw new Error('在庫0のロットを含む対象ロットで絞り込めない');
   });
+  await step('長い商品名・仕入先名でも、スマホ幅で横にはみ出さない', async () => {
+    const vs = page.viewportSize();
+    const orig = psql(server.sb.db, "select id || '|' || name from exo.m_product order by id limit 1").split('|');
+    const origS = psql(server.sb.db, "select id || '|' || name from exo.m_supplier order by id limit 1").split('|');
+    psql(server.sb.db, `update exo.m_product set name = 'ヒト臍帯由来間葉系幹細胞培養上清エクソソーム高濃度凍結原液（研究開発用）' where id = ${orig[0]}`);
+    psql(server.sb.db, `update exo.m_supplier set name = '株式会社バイオメディカルサプライジャパン東日本営業所' where id = ${origS[0]}`);
+    try {
+      await page.setViewportSize({ width: 360, height: 780 });
+      await page.evaluate(() => { S.mAt = 0; });
+      for (const pg of ['inspect', 'receipt', 'traceLot', 'recall']) {
+        await page.evaluate((h) => { location.hash = '#/' + h; }, pg); await idle(page); await page.waitForTimeout(300);
+        if (pg === 'receipt') await page.selectOption('#rcProduct', orig[0]).catch(() => {});
+        if (pg === 'traceLot') { await page.fill('#tlQuery', 'EXO'); await page.click('#tlSearch button[type="submit"]'); await idle(page); }
+        const w = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+        if (w > 1) throw new Error(`${pg} が ${w}px はみ出す`);
+      }
+    } finally {
+      psql(server.sb.db, `update exo.m_product set name = '${orig[1]}' where id = ${orig[0]}`);
+      psql(server.sb.db, `update exo.m_supplier set name = '${origS[1]}' where id = ${origS[0]}`);
+      await page.setViewportSize(vs); await page.evaluate(() => { S.mAt = 0; $('rcProduct').value = ''; });
+      await page.evaluate(() => { location.hash = '#/dashboard'; }); await idle(page);
+    }
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
