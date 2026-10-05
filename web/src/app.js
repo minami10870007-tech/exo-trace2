@@ -168,7 +168,9 @@ function rpcError(res, data) {
 const WRITE_FORM = { createShipment: 'shipForm', registerReceipt: 'receiptForm', registerReturn: 'rtForm', disposeStock: 'disposeForm', createRecall: 'recallForm',
   saveMaster: 'masterForm', updateRecallTarget: (p) => 'tg_' + p.targetId, changeLotStatus: (p) => 'lot_' + p.lotId,
   cancelShipment: (p) => 'cs_' + p.shipmentId, closeRecall: (p) => 'cr_' + p.recallId };
-const MSG_UNSURE = '通信が途切れたため、登録できたか確認できませんでした。入力内容はそのままで、もう一度確定してください（二重に登録されることはありません。登録済みなら、その結果を表示します）。';
+const MSG_UNSURE = '通信が途切れたため、登録できたか確認できませんでした。入力内容はそのままで、もう一度同じ操作をしてください（二重に登録されることはありません。登録済みなら、その結果を表示します）。';
+/** 確認できないまま閉じようとしている入力ダイアログか（「保存されません」とは言えない） */
+const unsureDialog = (id) => (id === 'masterDialog' && !!S.unsure.masterForm) || (id === 'disposeDialog' && !!S.unsure.disposeForm);
 function newId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
   const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
@@ -925,7 +927,7 @@ function renderGuide() {
   $('guideGo').hidden = !page || (i === LAST && !done);
   if (page) $('guideGo').textContent = `「${g.table === 'rules' ? '販売可否ルール' : g.table ? MASTER[g.table].label + 'の登録' : page.label}」の画面を開く`;
   // 未完了のステップでは「画面を開く」を主ボタンにする（「次へ」で作業を飛ばさないように）
-  const work = g.key && !st[g.key] && g.key !== 'rules';
+  const work = g.key && !st[g.key] && (g.key !== 'rules' || !S.rulesSeen); // ルールは画面を一度開くまでは「画面を開く」を主な操作に
   $('guideGo').className = 'btn btn-block ' + (work ? 'btn-primary' : 'btn-secondary');
   $('guidePrev').hidden = i === 0;
   document.querySelector('#guideDialog .guide-note').hidden = i === LAST && done;
@@ -1529,6 +1531,7 @@ async function cancelShip(btn) {
       }
       const row = $('shRecent').querySelector(`tr[data-no="${CSS.escape(btn.dataset.no)}"]`);
       if (err.unsure && fresh && row && !row.querySelector('[data-action="cancelShip"]')) toast(`出荷 ${btn.dataset.no} の取消は完了していました`); // 通信は切れたが取消できていた
+      else if (err.unsure && fresh && row) toast(`出荷 ${btn.dataset.no} を取消できませんでした（通信が途切れました）。もう一度「出荷を取消」を押してください。`, 'ng');
       else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
       focusTo(row || $('shRecent'));
     }
@@ -1888,6 +1891,20 @@ async function openDispose(btn) {
   $('dpKind').focus();
 }
 
+/** 記録できたか分からないまま処分ダイアログを閉じた：在庫の数量を見比べて、記録できていたかを伝える */
+async function checkUnsureDispose() {
+  const f = $('disposeForm');
+  await loadInventory().catch(() => {});
+  const row = (S.inventory || []).find((r) => String(r.lot_id) === f.dataset.lotId && String(r.location_id) === f.dataset.locId);
+  const before = Number(f.dataset.stockAtSend), after = row ? Number(row.qty) : 0;
+  if (after < before) {
+    resetRequest('disposeForm');
+    alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていました（在庫 ${fmt(before)} → ${fmt(after)}）。`, 'ok');
+  } else {
+    alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていません（在庫 ${fmt(after)}）。もう一度「処分」から記録してください（同じ内容で開きます）。`, 'warn');
+  }
+}
+
 async function submitDispose(e) {
   if (!e.submitter || e.submitter.value !== 'ok') return;
   e.preventDefault();
@@ -2232,7 +2249,9 @@ async function saveTarget(btn) {
 async function recallFailed(err, id) {
   if (!S.sess) return; // ログアウトした（期限切れ）：ログイン画面が説明している
   const fresh = await loadRecalls().then(() => true, () => false);
-  toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
+  const card = $('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
+  if (err.unsure && fresh && card && !card.querySelector('[data-action="closeRecall"]') && /完了/.test(card.textContent)) toast('回収案件の完了は記録されていました');
+  else toast(err.message + (fresh ? '（最新の状態を表示しました）' : ''), 'ng');
   focusTo($('rclList').querySelector(`article[data-id="${CSS.escape(String(id))}"]`) || $('rclList'));
 }
 
@@ -2312,8 +2331,28 @@ const LIST_COLS = { m_product: ['name', 'product_code', 'storage_class', 'regula
   m_supplier: ['name', 'supplier_code', 'contact_name', 'phone', 'is_active'],
   m_location: ['name', 'location_code', 'storage_class', 'temp_min', 'temp_max', 'is_quarantine', 'is_active'] };
 
+/** 保存できたか分からないままマスタのダイアログを閉じた：最新を読み、保存されていたかを伝える */
+async function checkUnsureMaster() {
+  const m = S.masterSent; if (!m) return;
+  await reloadMasters().catch(() => {});
+  if (S.page === 'master') await loadMaster().catch(() => {});
+  const rows = S.M[MASTER[m.t].key] || [];
+  const r = m.id ? rows.find((x) => String(x.id) === String(m.id)) : rows.find((x) => String(x[m.codeKey] || '').toUpperCase() === m.code);
+  const saved = r && (!m.id || String(r.updated_at) !== String(m.ver || ''));
+  if (saved) {
+    resetRequest('masterForm');
+    toast(`${MASTER[m.t].label}「${m.code}」は保存されていました`);
+    const row = $('msList').querySelector(`[data-action="editMaster"][data-id="${CSS.escape(String(r.id))}"]`);
+    if (row) { row.scrollIntoView({ block: 'nearest' }); focusTo(row); }
+  } else {
+    resetRequest('masterForm');
+    toast(`${MASTER[m.t].label}「${m.code}」は保存されていません。もう一度${m.id ? '開いて' : '「新規登録」から'}保存してください。`, 'warn');
+  }
+}
+
 async function loadMaster() {
   const t = S.masterTable;
+  if (t === 'rules') S.rulesSeen = true;
   document.querySelectorAll('#msTabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.table === t)));
   scrollFade($('msTabs'));
   syncTabs($('msTabs'));
@@ -2382,7 +2421,7 @@ function editMaster(id) {
 }
 
 async function saveMasterForm(e) {
-  if (e.submitter && e.submitter.value === 'cancel' && $('masterForm').dataset.dirty === '1') {
+  if (e.submitter && e.submitter.value === 'cancel' && $('masterForm').dataset.dirty === '1' && !unsureDialog('masterDialog')) {
     e.preventDefault();
     if (await ask({ title: '変更を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('masterDialog').close();
     return;
@@ -2401,6 +2440,7 @@ async function saveMasterForm(e) {
         (before.toUpperCase() === String(data[codeKey]).trim().toUpperCase() ? '\n（コードは大文字にそろえて保存します）' : ''), okText: '変更して保存' }))) return;
   await busy(e.submitter, async () => {
     try {
+      S.masterSent = { t, id: data.id, code: String(data[codeKey] || '').trim().toUpperCase(), ver: data.expected_updated_at, codeKey };
       const saved = await api('saveMaster', t, data);
       $('masterDialog').close();
       toast(MASTER[t].label + 'を保存しました');
@@ -2513,22 +2553,7 @@ const ACTIONS = {
   dialogCancel: async (el) => {
     const dlg = el.closest('dialog');
     const form = dlg.querySelector('form');
-    if (dlg.id === 'disposeDialog' && S.unsure.disposeForm) { // 記録できたか分からないまま閉じる：在庫を最新にして確かめてもらう
-      dlg.close('cancel');
-      const f = $('disposeForm');
-      await loadInventory().catch(() => {});
-      // 在庫の数量を見比べて、記録できていたかを伝える
-      const row = (S.inventory || []).find((r) => String(r.lot_id) === f.dataset.lotId && String(r.location_id) === f.dataset.locId);
-      const before = Number(f.dataset.stockAtSend), after = row ? Number(row.qty) : 0;
-      if (after < before) {
-        resetRequest('disposeForm');
-        alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていました（在庫 ${fmt(before)} → ${fmt(after)}）。`, 'ok');
-      } else {
-        alertBox('invMsg', `ロット ${f.dataset.lot} の処分は記録されていません（在庫 ${fmt(after)}）。もう一度「処分」から記録してください（同じ内容で開きます）。`, 'warn');
-      }
-      return;
-    }
-    if (form && form.dataset.dirty === '1' && dlg.id !== 'dialog') {
+    if (form && form.dataset.dirty === '1' && dlg.id !== 'dialog' && !unsureDialog(dlg.id)) {
       if (!(await ask({ title: '入力内容を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true }))) return;
     }
     dlg.close('cancel');
@@ -2692,19 +2717,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('disposeForm').addEventListener('submit', submitDispose);
   $('disposeForm').addEventListener('input', () => { $('disposeForm').dataset.dirty = '1'; });
   $('disposeDialog').addEventListener('cancel', async (e) => {
-    if ($('disposeForm').dataset.dirty !== '1') return;
+    if ($('disposeForm').dataset.dirty !== '1' || unsureDialog('disposeDialog')) return; // 確認できないまま閉じるときは、閉じたあとで結果を確かめる
     e.preventDefault();
     if (await ask({ title: '入力内容を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('disposeDialog').close();
   });
   $('disposeDialog').addEventListener('close', () => {
+    if (S.unsure.disposeForm) { checkUnsureDispose(); return; } // どの閉じ方でも、記録できていたかを確かめて伝える
     if (G_STATE.disposeOpener && G_STATE.disposeOpener.isConnected) focusTo(G_STATE.disposeOpener);
     else if (!$('page-inventory').hidden) focusTo($('invMsg').firstElementChild || $('invBody')); // 行が消えていたら一覧へ
   });
+  $('masterDialog').addEventListener('close', () => { if (S.unsure.masterForm) checkUnsureMaster(); });
   // マスタ編集：変更があるのに閉じようとしたら確認する
   $('masterFields').addEventListener('input', () => { $('masterForm').dataset.dirty = '1'; });
   $('masterFields').addEventListener('change', () => { $('masterForm').dataset.dirty = '1'; });
   $('masterDialog').addEventListener('cancel', async (e) => {
-    if ($('masterForm').dataset.dirty !== '1') return;
+    if ($('masterForm').dataset.dirty !== '1' || unsureDialog('masterDialog')) return;
     e.preventDefault();
     if (await ask({ title: '変更を破棄しますか？', body: '入力した内容は保存されません。', okText: '破棄して閉じる', danger: true })) $('masterDialog').close();
   });
@@ -2731,7 +2758,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('hashchange', async () => {
     if (!S.sess || $('app').hidden) return;
     // 入力途中のダイアログ（マスタ編集・処分）があるときに「戻る」が押されたら、元の画面に戻して確認する
-    const dirty = ($('masterDialog').open && $('masterForm').dataset.dirty === '1') || ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1');
+    const dirty = ($('masterDialog').open && $('masterForm').dataset.dirty === '1' && !unsureDialog('masterDialog')) || ($('disposeDialog').open && $('disposeForm').dataset.dirty === '1' && !unsureDialog('disposeDialog'));
     if (dirty) {
       const target = location.hash;
       history.pushState(null, '', S.lastHash || '#/dashboard');

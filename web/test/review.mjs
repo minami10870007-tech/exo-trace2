@@ -513,6 +513,22 @@ for (const vp of VIEWPORTS) {
     await page.click(`#shRecent [data-action="cancelShip"][data-no="${no}"]`); await page.fill('#dialogInput', 'テスト取消').catch(() => {}); await page.click('#dialogOk'); await idle(page);
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);
   });
+  await step('マスタ保存の応答が届かないまま閉じても、保存されていたかを伝える', async () => {
+    await page.evaluate(() => { location.hash = '#/master'; }); await idle(page);
+    await page.click('#msTabs [data-table="m_supplier"]'); await idle(page);
+    await page.click('#msNew'); await page.waitForSelector('#masterDialog[open]');
+    await page.fill('#mf_supplier_code', 'S9UNS'); await page.fill('#mf_name', '確認テスト商事');
+    let lost = true; globalThis.EXPECT_NET_ERR = true;
+    await page.route('**/rpc/save_master', async (route) => { if (lost) { lost = false; await route.fetch(); await route.abort(); } else await route.continue(); });
+    try {
+      await page.click('#masterForm button[value="save"]'); await waitText('#masterMsg', /登録できたか確認できませんでした/);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => /S9UNS」は保存されていました/.test(document.getElementById('toasts').textContent), null, { timeout: 10000 })
+        .catch(async () => { throw new Error('保存されていたと伝えない: ' + (await page.textContent('#toasts'))); });
+      if (await page.isVisible('#dialog[open]')) throw new Error('「保存されません」の確認が出た');
+    } finally { await page.unroute('**/rpc/save_master'); globalThis.EXPECT_NET_ERR = false; }
+    await page.click('#msTabs [data-table="m_product"]'); await idle(page);
+  });
   await step('全角で入力した番号でも検索できる・メニューを Esc で閉じるとメニューボタンに戻る', async () => {
     await page.evaluate(() => { location.hash = '#/traceLot'; }); await idle(page);
     await page.fill('#tlQuery', 'ＥＸＯ－ＵＣ５０'); await page.click('#tlSearch button[type="submit"]'); await idle(page);
