@@ -34,6 +34,8 @@
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></symbol>
 </svg>
 
 <div class="progress" id="progress" aria-hidden="true"></div>
@@ -65,6 +67,7 @@
     <div class="topbar-brand"><img src="/icon.svg" alt="" width="28" height="28"></div>
     <h1 id="pageTitle">ダッシュボード</h1>
     <div class="topbar-actions">
+      <button class="icon-btn" type="button" data-action="guideOpen" aria-label="使い方ガイド" title="使い方ガイド"><svg class="ic"><use href="#i-help"/></svg></button>
       <button class="icon-btn" type="button" data-action="reload" aria-label="最新の情報に更新"><svg class="ic"><use href="#i-refresh"/></svg></button>
     </div>
   </header>
@@ -260,6 +263,33 @@
     <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="save" type="submit">保存</button></div>
   </form>
 </dialog>
+
+<!-- はじめてガイド（ステップ形式） -->
+<dialog class="dialog guide" id="guideDialog" aria-labelledby="guideTitle" aria-describedby="guideBody">
+  <div class="guide-wrap">
+    <div class="guide-top">
+      <span class="guide-count" id="guideCount"></span>
+      <button class="btn btn-ghost btn-sm" type="button" data-action="guideClose" id="guideSkip">あとで見る</button>
+    </div>
+    <div class="guide-progress" aria-hidden="true"><i id="guideBar"></i></div>
+    <div class="guide-icon" id="guideIcon" aria-hidden="true"></div>
+    <h2 id="guideTitle"></h2>
+    <p class="guide-body" id="guideBody"></p>
+    <div id="guideStatus"></div>
+    <button class="btn btn-secondary btn-block" type="button" data-action="guideGo" id="guideGo"></button>
+    <div class="guide-nav">
+      <button class="btn btn-ghost" type="button" data-action="guidePrev" id="guidePrev">戻る</button>
+      <ol class="guide-dots" id="guideDots" aria-hidden="true"></ol>
+      <button class="btn btn-primary" type="button" data-action="guideNext" id="guideNext">次へ</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ガイドの途中で画面を開いたときの「続きに戻る」 -->
+<div class="guide-resume" id="guideResume" hidden>
+  <button class="guide-resume-main" type="button" data-action="guideResume"><svg class="ic" aria-hidden="true"><use href="#i-flag"/></svg><span id="guideResumeText"></span></button>
+  <button class="icon-btn" type="button" data-action="guideResumeClose" aria-label="ガイドを閉じる"><svg class="ic"><use href="#i-x"/></svg></button>
+</div>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">このアプリを利用するには JavaScript を有効にしてください。</p></noscript>

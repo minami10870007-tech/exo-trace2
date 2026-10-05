@@ -35,12 +35,12 @@ const matches = (pattern, path) => (pattern.endsWith('/*') ? path.startsWith(pat
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain' };
 
-export async function startServer({ port = 8888, seed = true, db = 'exo_web_test' } = {}) {
+export async function startServer({ port = 8888, seed = true, db = 'exo_web_test', guideDone = true } = {}) {
   const sb = await startSupabase({ db, users: [{ ...DEMO_USER, allowed: true }, { ...SECOND_USER, allowed: true }, { ...OUTSIDER, allowed: false }] });
   if (seed) await seedData(sb);
+  // 画面レビューでガイドが毎回開かないよう、サンプルデータ入りのときはガイドを見た状態にする（未設定の人の確認は seed=false で行う）
+  if (seed && guideDone) sb.sql(`update exo.app_user set prefs = prefs || '{"guideDone": true}'`);
 
-  process.env.SUPABASE_URL = sb.url;
-  process.env.SUPABASE_ANON_KEY = sb.anonKey;
   const configHandler = (await import(pathToFileURL(join(repo, 'netlify', 'functions', 'config.mjs')).href)).default;
   // 本番の CSP は https://*.supabase.co への接続だけを許可する。ローカルの Supabase に向けて書き換える
   const headerRules = parseHeaders().map((r) => ({ ...r, values: Object.fromEntries(Object.entries(r.values).map(([k, v]) =>
@@ -50,6 +50,9 @@ export async function startServer({ port = 8888, seed = true, db = 'exo_web_test
   const app = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/config') {
+      // 複数のサーバーを同時に動かしても混ざらないよう、呼び出しの直前にこのサーバーの接続先を設定する
+      process.env.SUPABASE_URL = sb.url;
+      process.env.SUPABASE_ANON_KEY = sb.anonKey;
       const response = await configHandler(new Request('http://localhost/api/config', { method: req.method }));
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));

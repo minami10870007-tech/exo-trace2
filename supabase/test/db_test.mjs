@@ -52,6 +52,14 @@ try {
   ok(M.locations.length === 4 && M.salesRules.length === 20, '初期設定：保管場所4・販売可否ルール20（再実行しても重複しない）');
   ok(Object.keys((await G.get_config()).codes.storage_class).join() === 'M80,M20,COLD,RT', 'コード定義の並び順を保持');
 
+  // ---------------- はじめてガイド ----------------
+  const cfg0 = await G.get_config();
+  ok(cfg0.prefs && !cfg0.prefs.guideDone && cfg0.setup.suppliers === false && cfg0.setup.shipments === false, '初回：ガイド未表示・初期設定未完了');
+  ok((await G.save_user_prefs({ guideDone: true, evil: 'x' })).guideDone === true, 'ガイド表示済みを保存（許可外のキーは無視）');
+  const cfg1 = await G.get_config();
+  ok(cfg1.prefs.guideDone === true && !('evil' in cfg1.prefs), '保存した設定が次回ログインで返る');
+  try { await sb.rpc(null, 'save_user_prefs', {}); assert.fail(); } catch (e) { ok(e.status === 401, '未ログインは設定を保存できない'); }
+
   // ---------------- マスタ ----------------
   const sup = await G.save_master({ table: 'm_supplier', data: { supplier_code: 'S001', name: '仕入先A', is_active: true } });
   const prod = await G.save_master({ table: 'm_product', data: { product_code: 'EXO-A', name: 'エクソソーム原液A', storage_class: 'M80', shelf_life_days: 730,
@@ -187,6 +195,7 @@ try {
   const tA2 = rv.targets.find((t) => t.customer === 'サロンA');
   ok(tA2.shipped_qty === 0 && tA2.status === 'CLOSED', '出荷取消で回収対象を自動クローズ');
   ok((await G.reextract_recall({ recallId: rc.id })).targets.length === 2, '再抽出（冪等）');
+  ok(Object.values(await G.get_setup()).every(Boolean), '初期設定〜初回出荷まで完了');
   const dash = await G.get_dashboard();
   ok(dash.recalls.length === 1 && dash.recalls[0].recall_no === 'RCL-2026-001', 'ダッシュボード：対応中の回収');
   const closed = await G.close_recall({ recallId: rc.id });

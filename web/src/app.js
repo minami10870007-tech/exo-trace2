@@ -300,6 +300,7 @@ function showLogin(message, canRetry) {
   closeSheet();
   if ($('dialog').open) $('dialog').close();
   if ($('masterDialog').open) $('masterDialog').close();
+  if ($('guideDialog').open) { $('guideDialog').removeEventListener('close', markGuideDone); $('guideDialog').close(); $('guideDialog').addEventListener('close', markGuideDone); }
   $('app').hidden = true;
   $('login').hidden = false;
   alertBox('loginMsg', message || '', 'ng');
@@ -330,6 +331,7 @@ function clearScreens() {
   ['dashKpis', 'dashBody', 'rcMsg', 'insMsg', 'insBody', 'shLines', 'shMsg', 'shRecent', 'rtShipment', 'rtMsg', 'invBody', 'tlBody', 'tcBody',
     'rcLots', 'rclFormMsg', 'rclList', 'msList'].forEach((id) => { if ($(id)) $(id).innerHTML = ''; });
   $('rtForm').hidden = true;
+  $('guideResume').hidden = true;
   delete $('rcExp').dataset.manual;
   Object.assign(S, { cfg: null, M: null, inventory: [], returnLine: null, inspectFilter: 'QUARANTINE,HOLD', masterTable: 'm_product' });
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
@@ -379,6 +381,8 @@ async function boot() {
     ['rcDate', 'shDate'].forEach((id) => { $(id).value = S.cfg.today; });
     if (!$('shLines').children.length) addLine();
     route();
+    // 初めてログインした人には、ステップ形式のガイドを自動で表示する
+    if (!(S.cfg.prefs && S.cfg.prefs.guideDone)) openGuide(0);
   } catch (err) {
     if (S.sess) toast(err.message, 'ng');
   }
@@ -468,6 +472,113 @@ async function reloadMasters() {
   });
 }
 
+
+// ======================================================================
+// はじめてガイド（初回ログイン時に自動表示。右上の「?」からいつでも開ける）
+// ======================================================================
+const GUIDE = [
+  { icon: 'home', title: 'EXO-TRACE へようこそ',
+    body: '仕入れたエクソソームを「ロット」ごとに管理し、どのロットを・いつ・どのお客様に販売したかを、すぐに調べられるようにするシステムです。\n\nこのガイドでは、使い始めるまでの準備を順番にご案内します（目安 5〜10分）。各ステップの「この画面を開く」で実際の画面に移動できます。' },
+  { key: 'suppliers', icon: 'gear', page: 'master', table: 'm_supplier', title: '仕入先を登録する',
+    body: '「マスタ設定」の「仕入先」タブで「新規登録」を押し、エクソソームの仕入先（メーカー・卸）を登録します。\n\nコードは英数字とハイフンで付けます（例：S001）。' },
+  { key: 'products', icon: 'box', page: 'master', table: 'm_product', title: '商品を登録する',
+    body: '「商品」タブで、取り扱う商品を登録します。\n\n・保管温度区分（-80℃など）：入庫できる保管場所が決まります\n・有効期間（日）：製造日から使用期限を自動計算します\n・規制区分：販売できる顧客の種類が決まります' },
+  { key: 'customers', icon: 'user', page: 'master', table: 'm_customer', title: '顧客を登録する',
+    body: '「顧客」タブで販売先を登録します。\n\n医療機関の場合は医療機関コードが必須です。メールアドレス・電話番号は、回収が必要になったときの連絡先として使います。' },
+  { icon: 'check', page: 'master', table: 'rules', title: '販売できる組合せを確認する',
+    body: '「販売可否ルール」タブで、商品の規制区分 × 顧客区分ごとに「出荷してよいか」を決めます。\n\n最初の設定は仮のものです。法令上の区分を確認したうえで、必ず見直してください。' },
+  { key: 'lots', icon: 'inbox', page: 'receipt', title: '入荷を登録する',
+    body: '商品が届いたら「入荷登録」で、仕入先ロット番号・使用期限（または製造日）・数量を入力します。\n\n社内ロット番号が自動で付き、ロットは「検品待ち」になります。' },
+  { key: 'released', icon: 'check', page: 'inspect', title: '検品して合格にする',
+    body: '「検品・ロット」で COA（試験成績書）を確認し、判定を「合格」にします。\n\n合格したロットだけが出荷できます。問題があれば「保留」「不合格」にします。' },
+  { key: 'shipments', icon: 'truck', page: 'shipment', title: '出荷を登録する',
+    body: '「出荷登録」で顧客と商品・数量を選びます。使用期限の近いロットから自動で割り当てるので、ロットを選ぶ必要はありません。\n\n出荷すると「どのロットを誰に売ったか」が記録されます。' },
+  { icon: 'search', page: 'traceLot', title: '準備はこれで完了です',
+    body: '日々の業務は「入荷 → 検品 → 出荷」の繰り返しです。\n\n・ロット追跡：ロット番号から販売先と連絡先を一覧できます\n・回収管理：問題のあるロットの対象顧客を自動で抽出します\n\nこのガイドは、画面右上の「?」からいつでも開けます。' },
+];
+const SETUP_KEYS = GUIDE.filter((g) => g.key).map((g) => g.key);
+const G_STATE = { step: 0 };
+
+function setupDone(setup) { return SETUP_KEYS.every((k) => setup && setup[k]); }
+
+function renderGuide() {
+  const i = G_STATE.step, g = GUIDE[i], setup = (S.cfg && S.cfg.setup) || {};
+  const last = i === GUIDE.length - 1;
+  $('guideCount').textContent = `ステップ ${i + 1} / ${GUIDE.length}`;
+  $('guideBar').style.width = Math.round(((i + 1) / GUIDE.length) * 100) + '%';
+  $('guideIcon').innerHTML = icon(g.icon);
+  $('guideTitle').textContent = g.title;
+  $('guideBody').textContent = g.body;
+  $('guideStatus').innerHTML = g.key ? (setup[g.key]
+    ? `<span class="guide-state done">${icon('check')}このステップは完了しています</span>`
+    : `<span class="guide-state todo">${icon('flag')}まだ登録がありません</span>`)
+    : (i === 0 && setupDone(setup) ? `<span class="guide-state done">${icon('check')}準備はすべて完了しています</span>` : '');
+  const page = g.page && PAGES.find((p) => p.id === g.page);
+  $('guideGo').hidden = !page;
+  if (page) $('guideGo').textContent = `「${g.table === 'rules' ? '販売可否ルール' : page.label}」の画面を開く`;
+  $('guidePrev').hidden = i === 0;
+  $('guideNext').textContent = last ? 'はじめる' : i === 0 ? 'はじめる準備をする' : '次へ';
+  $('guideSkip').hidden = last;
+  $('guideDots').innerHTML = GUIDE.map((x, j) => `<li class="${j === i ? 'cur' : x.key && setup[x.key] ? 'done' : ''}"></li>`).join('');
+}
+
+function openGuide(step) {
+  G_STATE.step = Math.max(0, Math.min(GUIDE.length - 1, step || 0));
+  $('guideResume').hidden = true;
+  closeSheet();
+  renderGuide();
+  if (!$('guideDialog').open) $('guideDialog').showModal();
+  $('guideNext').focus();
+}
+
+/** ガイドを閉じる（見たことを記録し、次回から自動では開かない） */
+function closeGuide() {
+  if ($('guideDialog').open) $('guideDialog').close();
+}
+
+function markGuideDone() {
+  if (!S.cfg || (S.cfg.prefs && S.cfg.prefs.guideDone)) return;
+  S.cfg.prefs = Object.assign({}, S.cfg.prefs, { guideDone: true });
+  api('saveUserPrefs', { guideDone: true }).catch(() => {});
+}
+
+/** ステップの画面を開き、画面下に「ガイドの続き」を出す */
+function guideGo() {
+  const g = GUIDE[G_STATE.step];
+  closeGuide();
+  if (g.table) S.masterTable = g.table;
+  go(g.page);
+  $('guideResumeText').textContent = `ガイドに戻る（ステップ ${G_STATE.step + 1} / ${GUIDE.length}）`;
+  $('guideResume').hidden = false;
+}
+
+/** 「ガイドに戻る」：進み具合を取り直し、終わっていれば次のステップへ */
+async function guideResume(btn) {
+  await busy(btn, async () => {
+    try { S.cfg.setup = await api('getSetup'); } catch (e) { /* 取れなくてもガイドは開く */ }
+    const g = GUIDE[G_STATE.step];
+    const next = g.key && S.cfg.setup && S.cfg.setup[g.key] && G_STATE.step < GUIDE.length - 1;
+    if (next) toast(`ステップ ${G_STATE.step + 1}「${g.title}」が完了しました`);
+    openGuide(G_STATE.step + (next ? 1 : 0));
+  });
+}
+
+/** ダッシュボード「はじめにやること」 */
+function setupCard(setup) {
+  if (!setup || setupDone(setup) || (S.cfg.prefs && S.cfg.prefs.checklistHidden)) return '';
+  const steps = GUIDE.map((g, i) => ({ g, i })).filter((x) => x.g.key);
+  const done = steps.filter((x) => setup[x.g.key]).length;
+  return `<section class="card span-full setup-card" aria-labelledby="setupTitle"><div class="card-head"><div>
+      <h2 class="card-title" id="setupTitle">はじめにやること</h2><p class="card-sub">${done} / ${steps.length} 完了・上から順に進めると、入荷から出荷までが使えるようになります。</p></div></div>
+    <div class="meter" aria-hidden="true"><i data-w="${Math.round((done / steps.length) * 100)}"></i></div>
+    <ol class="setup-list">${steps.map(({ g, i }, n) => `<li class="${setup[g.key] ? 'done' : ''}">
+      <span class="setup-mark" aria-hidden="true">${setup[g.key] ? icon('check') : n + 1}</span>
+      <div class="grow"><div class="setup-t">${esc(g.title)}</div><div class="setup-s">${setup[g.key] ? '完了' : '未完了'}</div></div>
+      ${setup[g.key] ? '' : `<button type="button" class="btn btn-secondary btn-sm" data-action="guideStep" data-step="${i}" aria-label="${esc(g.title)}の手順を見る">手順を見る</button>`}</li>`).join('')}</ol>
+    <div class="setup-foot"><button type="button" class="btn btn-ghost btn-sm" data-action="hideSetup">このカードを非表示</button>
+      <button type="button" class="btn btn-primary btn-sm" data-action="guideOpen">ガイドを最初から見る</button></div></section>`;
+}
+
 // ======================================================================
 // ダッシュボード
 // ======================================================================
@@ -494,7 +605,8 @@ async function loadDashboard() {
     lc.mismatches.slice(0, 5).map((m) => `${esc(m.lot_no)}／${esc(m.location)}：在庫 ${fmt(m.on_hand)}・履歴合計 ${fmt(m.movement_total)}`).join('\n') +
     (lc.mismatches.length > 5 ? '\nほか ' + (lc.mismatches.length - 5) + ' 件' : '') + '\n管理者に確認してください。</div>' : '';
   const stale = d.checkStale ? `<div class="alert alert-warn span-full" role="status">日次チェック（期限切れの判定・在庫の照合）が24時間以上実行されていません${lc ? `（最終 ${esc(lc.ran_at)}）` : ''}。\nSupabase の「Integrations」→「Cron」に exo-trace-daily-check があるか、管理者に確認を依頼してください。</div>` : '';
-  $('dashBody').innerHTML = mismatch + stale +
+  if (S.cfg) S.cfg.setup = d.setup;
+  $('dashBody').innerHTML = mismatch + stale + setupCard(d.setup) +
     `<div class="card"><h2 class="card-title">対応中の回収案件</h2>${recalls}</div>` +
     `<div class="card"><h2 class="card-title">発注点以下の商品</h2>${table([{ label: '商品', cls: 'primary' }, { label: '引当可能在庫', cls: 'num' }, { label: '発注点', cls: 'num' }],
       d.lowStock.map((x) => ({ cells: [html(esc(x.product)), num(x.available), num(x.reorderPoint)] })), { empty: '発注点を下回る商品はありません', emptyIcon: 'check' })}</div>` +
@@ -1035,6 +1147,21 @@ const ACTIONS = {
   openSheet, closeSheet,
   logout: () => logout(''),
   retry,
+  guideOpen: () => openGuide(0),
+  guideStep: (el) => openGuide(Number(el.dataset.step)),
+  guideNext: () => { if (G_STATE.step >= GUIDE.length - 1) closeGuide(); else { G_STATE.step++; renderGuide(); $('guideNext').focus(); } },
+  guidePrev: () => { if (G_STATE.step > 0) { G_STATE.step--; renderGuide(); (G_STATE.step === 0 ? $('guideNext') : $('guidePrev')).focus(); } },
+  guideClose: closeGuide,
+  guideGo,
+  guideResume,
+  guideResumeClose: () => { $('guideResume').hidden = true; },
+  hideSetup: async (el) => busy(el, async () => {
+    try {
+      S.cfg.prefs = await api('saveUserPrefs', { checklistHidden: true });
+      toast('「はじめにやること」を非表示にしました（右上の「?」からガイドを開けます）');
+      await loadDashboard();
+    } catch (err) { toast(err.message, 'ng'); }
+  }),
   reload: async (el) => busy(el, async () => {
     try { await reloadMasters(); showPage(S.page); toast('最新の情報に更新しました'); } catch (err) { toast(err.message, 'ng'); }
   }),
@@ -1091,6 +1218,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('recallForm').addEventListener('submit', submitRecall);
   $('masterForm').addEventListener('submit', saveMasterForm);
   $('sheetBackdrop').addEventListener('click', closeSheet);
+  // ガイドは閉じ方（はじめる・あとで見る・Esc）にかかわらず「見た」と記録する
+  $('guideDialog').addEventListener('close', markGuideDone);
+  $('guideDialog').addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea, select')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); ACTIONS.guideNext(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); ACTIONS.guidePrev(); }
+  });
   $('insFilter').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-filter]');
     if (b) { S.inspectFilter = b.dataset.filter; loadInspect().catch((err) => toast(err.message, 'ng')); }

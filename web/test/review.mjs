@@ -217,6 +217,7 @@ const SCENES = [
   ['master-rules', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="rules"]'); }],
   ['master-dialog', async (p) => { await p.goto(server.url + '/#/master'); await idle(p); await p.click('#msTabs [data-table="m_product"]'); await idle(p); await p.click('#msList tr[data-action]'); }],
   ['confirm-dialog', async (p) => { await p.goto(server.url + '/#/shipment'); await idle(p); await p.click('[data-action="cancelShip"]'); }],
+  ['guide', async (p) => { await p.goto(server.url + '/#/dashboard'); await idle(p); await p.click('.topbar [data-action="guideOpen"]'); await p.click('#guideNext'); await p.click('#guideNext'); }],
   ['menu-sheet', async (p, vp) => { if (vp.width >= 768) return 'skip'; await p.goto(server.url + '/#/dashboard'); await idle(p); await p.click('#moreBtn'); }],
 ];
 
@@ -357,6 +358,82 @@ for (const vp of VIEWPORTS) {
   });
   if (errs.length) { report.errors.push({ viewport: 'flow', errs }); total += errs.length; }
   await ctx.close();
+}
+
+// ---------------- はじめてガイド（データが空の新しい環境・初めてログインした人） ----------------
+{
+  const fresh = await startServer({ port: 0, seed: false, db: 'exo_web_fresh' });
+  for (const vp of [VIEWPORTS[0], VIEWPORTS[2], VIEWPORTS[3], VIEWPORTS[5]]) {
+    const { ctx, page, errs } = await newPage(vp);
+    const res = report.viewports[vp.name];
+    const shot = async (name) => {
+      await page.waitForTimeout(250);
+      res[name] = await page.evaluate(audit, { mobile: vp.mobile, dark: !!vp.dark, vw: vp.width });
+      total += res[name].length;
+      await page.screenshot({ path: join(OUT, `${vp.name}__${name}.png`), fullPage: !(await page.$('dialog[open]')) });
+    };
+    fresh.sb.sql(`update exo.app_user set prefs = '{}' where email = '${DEMO_USER.email}'`); // 毎回「初めてログインした人」にする
+    await page.goto(fresh.url + '/');
+    await page.fill('#loginEmail', DEMO_USER.email); await page.fill('#loginPassword', DEMO_USER.password);
+    await page.click('#loginForm button[type="submit"]');
+    await page.waitForSelector('#guideDialog[open]'); await idle(page);
+    await shot('onboarding-welcome');
+    await page.click('#guideNext'); await shot('onboarding-step2');
+    await page.click('#guideGo'); await idle(page); await shot('onboarding-resume');
+    await page.click('[data-action="guideResumeClose"]');
+    await page.goto(fresh.url + '/#/dashboard'); await idle(page); await shot('onboarding-dashboard');
+    if (errs.length) { report.errors.push({ viewport: vp.name + '-fresh', errs }); total += errs.length; }
+    await ctx.close();
+  }
+  // 操作フロー：ガイドに沿って登録し、完了が反映される
+  const { ctx, page, errs } = await newPage(VIEWPORTS[1]);
+  const step = async (label, fn) => {
+    try { await fn(); report.flow.push({ step: label, ok: true }); }
+    catch (e) { report.flow.push({ step: label, ok: false, error: e.message.split('\n')[0] }); total++; }
+  };
+  const waitText = (sel, re) => page.waitForFunction(([s, src]) => new RegExp(src).test(document.querySelector(s).textContent), [sel, re.source], { timeout: 15000 });
+  await step('ガイド：初回ログインで自動表示', async () => {
+    await page.goto(fresh.url + '/');
+    await page.fill('#loginEmail', SECOND_USER.email); await page.fill('#loginPassword', SECOND_USER.password);
+    await page.click('#loginForm button[type="submit"]'); await page.waitForSelector('#guideDialog[open]');
+    if (!/ステップ 1 \/ 9/.test(await page.textContent('#guideCount'))) throw new Error(await page.textContent('#guideCount'));
+    if (!(await page.isHidden('#guidePrev'))) throw new Error('最初のステップで「戻る」が出ている');
+  });
+  await step('ガイド：キーボードで前後に移動', async () => {
+    await page.keyboard.press('ArrowRight'); await waitText('#guideCount', /ステップ 2 /);
+    await page.keyboard.press('ArrowLeft'); await waitText('#guideCount', /ステップ 1 /);
+    await page.click('#guideNext');
+    if (!/まだ登録がありません/.test(await page.textContent('#guideStatus'))) throw new Error('未完了の表示がない');
+  });
+  await step('ガイド：画面を開いて登録→「ガイドに戻る」で次のステップへ', async () => {
+    await page.click('#guideGo'); await idle(page);
+    if (await page.$('#guideDialog[open]')) throw new Error('ガイドが閉じない');
+    if ((await page.getAttribute('#msTabs [data-table="m_supplier"]', 'aria-selected')) !== 'true') throw new Error('仕入先タブが開かない');
+    await page.click('#msNew'); await page.fill('#mf_supplier_code', 'S100'); await page.fill('#mf_name', 'ガイド仕入先');
+    await page.click('#masterForm button[value="save"]'); await waitText('#toasts', /保存しました/);
+    await page.click('[data-action="guideResume"]'); await page.waitForSelector('#guideDialog[open]');
+    await waitText('#guideCount', /ステップ 3 /);
+    if (!/完了しました/.test(await page.textContent('#toasts'))) throw new Error('完了の通知がない');
+  });
+  await step('ガイド：閉じたら次回ログインでは自動表示しない', async () => {
+    await page.click('#guideSkip'); await page.waitForSelector('#guideDialog:not([open])');
+    await page.waitForTimeout(500);
+    await page.click('#moreBtn'); await page.click('#moreSheet [data-action="logout"]'); await page.waitForSelector('#login:not([hidden])');
+    await page.fill('#loginPassword', SECOND_USER.password); await page.click('#loginForm button[type="submit"]');
+    await page.waitForSelector('#app:not([hidden])'); await idle(page); await page.waitForTimeout(300);
+    if (await page.$('#guideDialog[open]')) throw new Error('2回目のログインでもガイドが開いた');
+  });
+  await step('ダッシュボード「はじめにやること」：進み具合・手順を見る・非表示', async () => {
+    await page.goto(fresh.url + '/#/dashboard'); await idle(page);
+    const t = await page.textContent('.setup-card'); if (!/1 \/ 6 完了/.test(t)) throw new Error(t.slice(0, 80));
+    await page.click('.setup-card [data-action="guideStep"]'); await waitText('#guideCount', /ステップ 3 /);
+    await page.keyboard.press('Escape'); await page.waitForSelector('#guideDialog:not([open])');
+    await page.click('[data-action="hideSetup"]'); await waitText('#toasts', /非表示/);
+    if (await page.$('.setup-card')) throw new Error('非表示にならない');
+  });
+  if (errs.length) { report.errors.push({ viewport: 'guide-flow', errs }); total += errs.length; }
+  await ctx.close();
+  fresh.close();
 }
 
 // ---------------- 複数タブ・通信障害 ----------------
