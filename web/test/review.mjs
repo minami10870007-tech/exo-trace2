@@ -294,7 +294,7 @@ for (const vp of VIEWPORTS) {
     await card.locator('select.insTo').selectOption('REJECTED'); await card.locator('input.insReason').fill('テスト');
     await card.locator('[data-action="changeStatus"]').click(); await page.waitForSelector('#dialog[open]');
     if (!/元に戻せません/.test(await page.textContent('#dialogBody'))) throw new Error('確認の文言がない');
-    await page.click('#dialogForm button[value="cancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    await page.click('#dialogForm [data-action="dialogCancel"]'); await page.waitForFunction(() => !document.getElementById('dialog').open);
   });
   await step('返品：出荷番号が空なら案内・最近の出荷から選べる', async () => {
     await page.click('#moreBtn'); await page.click('#sheetNav [data-page="return"]'); await idle(page);
@@ -317,6 +317,18 @@ for (const vp of VIEWPORTS) {
     await page.click('#msList tr[data-action]'); await page.fill('#mf_reorder_point', '12');
     await page.click('#masterForm button[value="save"]'); await waitText('#toasts', /保存しました|。/).catch(() => {});
     if (await page.$('#masterDialog[open]')) throw new Error(await page.textContent('#masterMsg'));
+  });
+  await step('マスタ編集：Enter で保存、変更してキャンセルなら確認', async () => {
+    await page.click('#msList tr[data-action]'); await page.fill('#mf_reorder_point', '13'); await page.press('#mf_reorder_point', 'Enter');
+    await page.waitForFunction(() => !document.getElementById('masterDialog').open, null, { timeout: 10000 }).catch(() => { throw new Error('Enter で保存されない'); });
+    await waitText('#toasts', /保存しました/);
+    await page.click('#msList tr[data-action]'); await page.fill('#mf_reorder_point', '14');
+    await page.click('#masterForm [data-action="dialogCancel"]'); await page.waitForSelector('#dialog[open]');
+    if (!(await page.evaluate(() => document.activeElement.matches('#dialogForm [data-action="dialogCancel"]')))) throw new Error('破棄の確認でキャンセルに初期フォーカスがない');
+    await page.keyboard.press('Enter'); await page.waitForFunction(() => !document.getElementById('dialog').open);
+    if (!(await page.$('#masterDialog[open]'))) throw new Error('キャンセルしたのに閉じた');
+    await page.click('#masterForm [data-action="dialogCancel"]'); await page.click('#dialogOk');
+    await page.waitForFunction(() => !document.getElementById('masterDialog').open);
   });
   await step('処分待ちの在庫を廃棄として記録', async () => {
     await page.click('#bottomNav [data-page="dashboard"]'); await idle(page);

@@ -800,3 +800,16 @@ html:has(body.has-resume) { scroll-padding-top: calc(var(--topbar-h) + env(safe-
 .preset-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px; padding: 4px 4px 4px 12px; border-radius: 99px; background: var(--brand-soft); color: var(--brand); font-size: 13px; font-weight: 700; }
 
 
+
+/* ---------- UX round 6 ---------- */
+.rtable tr.clickable:focus-visible { outline: none; }
+.rtable tr.clickable:focus-visible td { background: var(--surface-2); box-shadow: inset 0 3px var(--focus), inset 0 -3px var(--focus); }
+@media (max-width: 767.98px) { .rtable tr.clickable:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; } .rtable tr.clickable:focus-visible td { box-shadow: none; } }
+.mono { overflow-wrap: normal; word-break: keep-all; }
+@media (min-width: 1024px) and (max-width: 1279.98px) { .kpi span { white-space: nowrap; } .kpi .kpi-go { display: none; } }
+@media (max-width: 639.98px) {
+  .dialog .dialog-actions { position: sticky; bottom: -20px; background: var(--surface); padding: 10px 0 4px; margin-bottom: -4px; z-index: 1; }
+}
+@media (max-width: 639.98px) and (prefers-color-scheme: dark) { .dialog .dialog-actions { background: var(--surface-2); } }
+.qty-row { display: flex; gap: 8px; align-items: stretch; }
+.qty-row input { flex: 1; min-width: 0; }

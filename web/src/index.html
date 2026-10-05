@@ -178,7 +178,7 @@
           <div class="field" id="rtRLocWrap" hidden><label for="rtRLoc">戻し保管場所</label><select id="rtRLoc" required></select></div>
           <div class="field span-full"><label for="rtReason">返品理由</label><textarea id="rtReason" rows="3" required maxlength="1000"></textarea></div>
         </div>
-        <p class="note">回収中のロットは自動的に回収品として登録され、処置は廃棄のみになります。</p>
+
         <div id="rtMsg"></div>
         <div class="form-actions sticky-actions"><button class="btn btn-secondary" type="button" data-action="cancelReturn">キャンセル</button><button class="btn btn-primary" type="submit">返品を登録</button></div>
       </form>
@@ -201,9 +201,8 @@
           <input id="tlQuery" type="search" placeholder="ロット番号" aria-describedby="tlHint" autocomplete="off" autocapitalize="characters" enterkeyhint="search">
           <button class="btn btn-primary" type="submit"><svg class="ic"><use href="#i-search"/></svg>追跡</button>
         </form>
-        <p class="field-hint" id="tlHint">社内ロット番号・仕入先ロット番号のどちらでも、一部だけでも探せます。</p>
+        <p class="field-hint" id="tlHint">社内ロット番号・仕入先ロット番号のどちらでも、一部だけでも探せます。販売先と顧客の手元の数量・在庫・履歴を表示します。</p>
         <div id="tlRecent"></div>
-        <p class="note">部分一致で検索できます。販売先・顧客の手元に残っている数量・在庫・ステータス履歴を表示します。</p>
       </div>
       <div id="tlBody"></div>
     </section>
@@ -227,7 +226,7 @@
         <form id="recallForm" novalidate>
           <div class="form-grid">
             <div class="field span-2"><label for="rcTitle">件名</label><input id="rcTitle" required maxlength="200"></div>
-            <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required aria-describedby="rcSevHint"><option value="">選択してください</option><option value="I">クラスI（重い健康被害のおそれ）</option><option value="II">クラスII（一時的・軽い健康被害のおそれ）</option><option value="III">クラスIII（健康被害のおそれはほぼない）</option></select><div class="field-hint" id="rcSevHint">迷ったら品質責任者に確認してください。</div></div>
+            <div class="field"><label for="rcSev">重大度</label><select id="rcSev" required aria-describedby="rcSevHint"><option value="">選択してください</option><option value="I">クラスI</option><option value="II">クラスII</option><option value="III">クラスIII</option></select><div class="field-hint" id="rcSevHint">I：重い健康被害のおそれ／II：一時的・軽い健康被害のおそれ／III：健康被害のおそれはほぼない。迷ったら品質責任者に確認してください。</div></div>
             <div class="field span-full"><label for="rcReason">回収理由</label><textarea id="rcReason" rows="3" required maxlength="1000"></textarea></div>
           </div>
           <fieldset class="field span-full"><legend>対象ロット</legend><div class="check-list" id="rcLots"></div></fieldset>
@@ -273,7 +272,7 @@
     <h2 id="dialogTitle"></h2>
     <p id="dialogBody"></p>
     <div class="field" id="dialogInputWrap" hidden><label for="dialogInput" id="dialogInputLabel"></label><textarea id="dialogInput" rows="3" maxlength="1000" aria-describedby="dialogInputErr"></textarea><div class="field-err" id="dialogInputErr"></div></div>
-    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="ok" type="submit" id="dialogOk">OK</button></div>
+    <div class="form-actions"><button class="btn btn-secondary" type="button" data-action="dialogCancel">キャンセル</button><button class="btn btn-primary" value="ok" type="submit" id="dialogOk">OK</button></div>
   </form>
 </dialog>
 
@@ -283,20 +282,20 @@
     <h2 id="disposeTitle">在庫を処分する</h2>
     <p id="disposeInfo"></p>
     <div class="field"><label for="dpKind">処分の方法</label><select id="dpKind" required><option value="">選択してください</option><option value="DISPOSE">廃棄</option><option value="SUPPLIER_RETURN">仕入先へ返品</option></select></div>
-    <div class="field"><label for="dpQty">数量</label><input id="dpQty" type="number" inputmode="numeric" min="1" step="1" required aria-describedby="dpQtyHint"><div class="field-hint" id="dpQtyHint"></div></div>
-    <div class="field"><label for="dpReason">理由・記録（例：回収品のため廃棄業者へ引渡し）</label><textarea id="dpReason" rows="3" maxlength="1000" required></textarea></div>
+    <div class="field"><label for="dpQty">数量</label><div class="qty-row"><input id="dpQty" type="number" inputmode="numeric" min="1" step="1" required aria-describedby="dpQtyHint"><button class="btn btn-secondary" type="button" data-action="disposeAll" id="dpAll">全数</button></div><div class="field-hint" id="dpQtyHint"></div></div>
+    <div class="field"><label for="dpReason">理由・記録</label><textarea id="dpReason" rows="3" maxlength="1000" required placeholder="例：回収品のため廃棄業者へ引渡し"></textarea></div>
     <div id="dpMsg"></div>
-    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-danger" value="ok" type="submit">処分を記録する</button></div>
+    <div class="form-actions dialog-actions"><button class="btn btn-secondary" type="button" data-action="dialogCancel">キャンセル</button><button class="btn btn-danger" value="ok" type="submit">処分を記録する</button></div>
   </form>
 </dialog>
 
 <!-- マスタ編集（フルスクリーン on モバイル） -->
 <dialog class="dialog dialog-lg" id="masterDialog" aria-labelledby="masterTitle">
   <form method="dialog" id="masterForm" novalidate>
-    <div class="dialog-head"><h2 id="masterTitle"></h2><button class="icon-btn" value="cancel" type="submit" formnovalidate aria-label="閉じる"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="dialog-head"><h2 id="masterTitle"></h2><button class="icon-btn" type="button" data-action="dialogCancel" aria-label="閉じる"><svg class="ic"><use href="#i-x"/></svg></button></div>
     <div class="form-grid" id="masterFields"></div>
     <div id="masterMsg"></div>
-    <div class="form-actions"><button class="btn btn-secondary" value="cancel" type="submit" formnovalidate>キャンセル</button><button class="btn btn-primary" value="save" type="submit">保存</button></div>
+    <div class="form-actions"><button class="btn btn-secondary" type="button" data-action="dialogCancel">キャンセル</button><button class="btn btn-primary" value="save" type="submit">保存</button></div>
   </form>
 </dialog>
 
